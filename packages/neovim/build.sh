@@ -8,11 +8,11 @@ TERMUX_PKG_REVISION=1
 TERMUX_PKG_SRCURL="https://github.com/neovim/neovim/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
 TERMUX_PKG_SHA256=36a6c66bfbba5d96fa512110aecddb981148a4d013b5ecd01a42877c49855a41
 
-# 运行时仅保留 libandroid-support (shim 脚本可能需要) 和 tree-sitter-parsers (动态加载的语法解析器)
-TERMUX_PKG_DEPENDS="libandroid-support, tree-sitter-parsers"
+# 运行时依赖保留 lua 相关和 tree-sitter-parsers
+TERMUX_PKG_DEPENDS="libandroid-support, libiconv, libmsgpack, luajit, lua51-lpeg, luv, tree-sitter, tree-sitter-parsers"
 
-# 构建时增加所有依赖的 -static 包，确保有 .a 文件可用
-TERMUX_PKG_BUILD_DEPENDS="libandroid-support-static, libiconv-static, libmsgpack-static, libunibilium-static, libuv-static, libvterm-static, lua51-lpeg-static, luajit-static, luv-static, tree-sitter-static, utf8proc-static"
+# 构建依赖：只添加确定存在 -static 包的核心 C 库
+TERMUX_PKG_BUILD_DEPENDS="libuv-static, libvterm-static, libunibilium-static, utf8proc-static, libandroid-support-static, libiconv-static"
 
 TERMUX_PKG_BREAKS="neovim-nightly"
 TERMUX_PKG_CONFLICTS="neovim-nightly"
@@ -23,7 +23,7 @@ TERMUX_PKG_UPDATE_VERSION_REGEXP="\d+\.\d+\.\d+"
 
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 -DLUAJIT_INCLUDE_DIR=$TERMUX_PREFIX/include/luajit-2.1
--DLPEG_LIBRARY=$TERMUX_PREFIX/lib/liblpeg-5.1.a
+-DLPEG_LIBRARY=$TERMUX_PREFIX/lib/liblpeg-5.1.so
 -DCOMPILE_LUA=OFF
 -DNLUA0_HOST_PRG=$TERMUX_PKG_HOSTBUILD_DIR/libnlua0.so
 -DNVIM_HOST_PRG=$TERMUX_PKG_HOSTBUILD_DIR/nvim
@@ -53,18 +53,13 @@ termux_step_host_build() {
 }
 
 termux_step_pre_configure() {
-    # 隐藏依赖库的动态库，强制 CMake 链接静态库 (.a)
+    # 仅隐藏我们确定要静态链接的核心 C 库的动态库
     local _libs=(
-        "libmsgpack"
-        "libmsgpack-c"
-        "libunibilium"
         "libuv"
         "libvterm"
-        "libluv"
-        "libtree-sitter"
+        "libunibilium"
         "libutf8proc"
         "libiconv"
-        "libluajit-5.1"
         "libandroid-support"
     )
     
@@ -79,9 +74,9 @@ termux_step_pre_configure() {
 }
 
 termux_step_post_make_install() {
-    # 恢复隐藏的动态库
+    # 恢复被隐藏的动态库
     cd "$TERMUX_PREFIX/lib"
-    for lib in libmsgpack libmsgpack-c libunibilium libuv libvterm libluv libtree-sitter libutf8proc libiconv libluajit-5.1 libandroid-support; do
+    for lib in libuv libvterm libunibilium libutf8proc libiconv libandroid-support; do
         for f in ${lib}.so*.bak; do
             if [ -e "$f" ] || [ -L "$f" ]; then
                 mv "$f" "${f%.bak}"
@@ -89,7 +84,7 @@ termux_step_post_make_install() {
         done
     done
 
-    # 打印二进制依赖，方便验证是否成功静态链接
+    # 打印二进制依赖，方便验证
     echo "========== NVIM BINARY DEPENDENCIES =========="
     ${READELF:-readelf} -d "$TERMUX_PREFIX/libexec/nvim/nvim" || true
     echo "=============================================="
