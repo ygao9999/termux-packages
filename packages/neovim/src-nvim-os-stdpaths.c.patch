@@ -6,7 +6,7 @@
    [kXDGRuntimeDir] = NULL,  // Decided by vim_mktempdir().
 -  [kXDGConfigDirs] = "/etc/xdg/",
 -  [kXDGDataDirs] = "/usr/local/share/:/usr/share/",
-+  [kXDGConfigDirs] = "@TERMUX_PREFIX@/etc/xdg/",
-+  [kXDGDataDirs] = "@TERMUX_PREFIX@/local/share/:@TERMUX_PREFIX@/share/",
++  [kXDGConfigDirs] = "~/etc/xdg/",
++  [kXDGDataDirs] = "~/.local/share/:~/etc/share/",
  #endif
  };
