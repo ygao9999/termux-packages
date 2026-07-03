@@ -8,8 +8,8 @@ TERMUX_PKG_REVISION=1
 TERMUX_PKG_SRCURL="https://github.com/neovim/neovim/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
 TERMUX_PKG_SHA256=36a6c66bfbba5d96fa512110aecddb981148a4d013b5ecd01a42877c49855a41
 
-# 依赖原生包，这些包在 Termux 中自带 .a 静态库文件
-TERMUX_PKG_DEPENDS="libandroid-support, libiconv, libmsgpack, libunibilium, libuv, libvterm (>= 1:0.3-0), lua51-lpeg, luajit, luv, tree-sitter, tree-sitter-parsers, utf8proc"
+# 依赖原生包（Termux 中这些包自带 .a 静态库文件）
+TERMUX_PKG_DEPENDS="libandroid-support, libiconv, libmsgpack, libunibilium, libuv, libvterm, lua51-lpeg, luajit, luv, tree-sitter, tree-sitter-parsers, utf8proc"
 
 TERMUX_PKG_BREAKS="neovim-nightly"
 TERMUX_PKG_CONFLICTS="neovim-nightly"
@@ -18,12 +18,18 @@ TERMUX_PKG_CONFFILES="share/nvim/sysinit.vim"
 TERMUX_PKG_AUTO_UPDATE=true
 TERMUX_PKG_UPDATE_VERSION_REGEXP="\d+\.\d+\.\d+"
 
+# 显式指定需要静态链接的库的 .a 绝对路径，让 CMake 直接使用静态库
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 -DLUAJIT_INCLUDE_DIR=$TERMUX_PREFIX/include/luajit-2.1
 -DLPEG_LIBRARY=$TERMUX_PREFIX/lib/liblpeg-5.1.so
 -DCOMPILE_LUA=OFF
 -DNLUA0_HOST_PRG=$TERMUX_PKG_HOSTBUILD_DIR/libnlua0.so
 -DNVIM_HOST_PRG=$TERMUX_PKG_HOSTBUILD_DIR/nvim
+-DLIBUV_LIBRARY=$TERMUX_PREFIX/lib/libuv.a
+-DUNIBILIUM_LIBRARY=$TERMUX_PREFIX/lib/libunibilium.a
+-DLIBVTERM_LIBRARY=$TERMUX_PREFIX/lib/libvterm.a
+-DUTF8PROC_LIBRARY=$TERMUX_PREFIX/lib/libutf8proc.a
+-DMSGPACK_LIBRARY=$TERMUX_PREFIX/lib/libmsgpack.a
 "
 
 termux_step_host_build() {
@@ -46,43 +52,8 @@ termux_step_host_build() {
     rm -Rf build/
 }
 
-termux_step_pre_configure() {
-    # 1. 强制 CMake 的 find_library 只搜索静态库后缀
-    export CMAKE_FIND_LIBRARY_SUFFIXES=".a"
-    TERMUX_PKG_EXTRA_CONFIGURE_ARGS+=" -DCMAKE_FIND_LIBRARY_SUFFIXES=.a"
-    # 2. 隐藏需要静态链接的核心 C 库的动态库
-    # 【注意】这里绝对不能有 libandroid-support！
-    local _libs=(
-        "libmsgpack"
-        "libmsgpackc"
-        "libunibilium"
-        "libuv"
-        "libvterm"
-        "libtree-sitter"
-        "libutf8proc"
-        "libiconv"
-    )    
-    cd "$TERMUX_PREFIX/lib"
-    for lib in "${_libs[@]}"; do
-        for f in ${lib}.so*; do
-            if [ -e "$f" ] || [ -L "$f" ]; then
-                mv "$f" "${f}.bak"
-            fi
-        done
-    done
-}
 termux_step_post_make_install() {
-    # 恢复被隐藏的动态库
-    # 【注意】这里也不能有 libandroid-support！
-    cd "$TERMUX_PREFIX/lib"
-    for lib in libmsgpack libmsgpackc libunibilium libuv libvterm libtree-sitter libutf8proc libiconv; do
-        for f in ${lib}.so*.bak; do
-            if [ -e "$f" ] || [ -L "$f" ]; then
-                mv "$f" "${f%.bak}"
-            fi
-        done
-    done
-    # 打印二进制依赖，方便验证
+    # 打印二进制依赖，方便在日志中验证是否成功去除了相关的 .so
     echo "========== NVIM BINARY DEPENDENCIES =========="
     ${READELF:-readelf} -d "$TERMUX_PREFIX/libexec/nvim/nvim" || true
     echo "=============================================="
