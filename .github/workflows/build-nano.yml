@@ -1,0 +1,23 @@
+name: Build nano static
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: termux/package-builder
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build nano
+        run: |
+          ./build-package.sh -a aarch64 nano
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nano-aarch64-deb
+          path: output/*.deb
