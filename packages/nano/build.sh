@@ -6,8 +6,7 @@ TERMUX_PKG_VERSION="9.1"
 TERMUX_PKG_SRCURL=https://nano-editor.org/dist/latest/nano-$TERMUX_PKG_VERSION.tar.xz
 TERMUX_PKG_SHA256=5f47764274cb7532349ce0aa20ec10f1e8e851a6e9fa3eb66812c43d196db042
 TERMUX_PKG_AUTO_UPDATE=true
-# 运行时完全独立，无任何第三方 .so 依赖
-TERMUX_PKG_DEPENDS=""
+# 运行时完全独立，无任何第三方 .so 依赖 (无需写 TERMUX_PKG_DEPENDS)
 # 构建时需要 ncurses 和 libandroid-support 的静态库（.a）
 TERMUX_PKG_BUILD_DEPENDS="ncurses-static, libandroid-support-static"
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
