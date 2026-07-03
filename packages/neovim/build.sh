@@ -11,8 +11,8 @@ TERMUX_PKG_SHA256=36a6c66bfbba5d96fa512110aecddb981148a4d013b5ecd01a42877c49855a
 # 运行时依赖保留 lua 相关和 tree-sitter-parsers
 TERMUX_PKG_DEPENDS="libandroid-support, libiconv, libmsgpack, luajit, lua51-lpeg, luv, tree-sitter, tree-sitter-parsers"
 
-# 构建依赖：只添加确定存在 -static 包的核心 C 库
-TERMUX_PKG_BUILD_DEPENDS="libuv-static, libvterm-static, libunibilium-static, utf8proc-static, libandroid-support-static, libiconv-static"
+# 构建依赖：同时声明原包（提供头文件）和 -static 包（提供 .a 静态库）
+TERMUX_PKG_BUILD_DEPENDS="libuv, libuv-static, libvterm, libvterm-static, libunibilium, libunibilium-static, utf8proc, utf8proc-static, libandroid-support-static, libiconv-static"
 
 TERMUX_PKG_BREAKS="neovim-nightly"
 TERMUX_PKG_CONFLICTS="neovim-nightly"
