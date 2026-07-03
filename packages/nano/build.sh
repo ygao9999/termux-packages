@@ -18,14 +18,25 @@ gl_cv_func_strcasecmp_works=yes
 --enable-utf8
 --with-wordbounds
 "
-# 强制把 ncursesw 静态链接进二进制，libc/libm 等系统库仍走动态链接
-TERMUX_PKG_EXTRA_LDFLAGS+=" -l:libncursesw.a"
 
 TERMUX_PKG_CONFFILES="etc/nanorc"
 TERMUX_PKG_RM_AFTER_INSTALL="bin/rnano share/man/man1/rnano.1 share/nano/man-html"
 
+termux_step_pre_configure() {
+    # 临时隐藏 ncursesw 的动态库，迫使链接器在 configure 和 make 时使用静态库 (.a)
+    # 链接器在解析 -lncursesw 时，会找不到 .so，从而退而求其次寻找 .a
+    if [ -e "$TERMUX_PREFIX/lib/libncursesw.so" ]; then
+        mv "$TERMUX_PREFIX/lib/libncursesw.so" "$TERMUX_PREFIX/lib/libncursesw.so.bak"
+    fi
+}
+
 termux_step_post_make_install() {
-	# Configure nano to use syntax highlighting:
-	NANORC=$TERMUX_PREFIX/etc/nanorc
-	echo "include \"$TERMUX_PREFIX/share/nano/*nanorc\"" > "$NANORC"
+    # 恢复被隐藏的动态库，以免影响构建环境中的其他包
+    if [ -e "$TERMUX_PREFIX/lib/libncursesw.so.bak" ]; then
+        mv "$TERMUX_PREFIX/lib/libncursesw.so.bak" "$TERMUX_PREFIX/lib/libncursesw.so"
+    fi
+
+    # Configure nano to use syntax highlighting:
+    NANORC=$TERMUX_PREFIX/etc/nanorc
+    echo "include \"$TERMUX_PREFIX/share/nano/*nanorc\"" > "$NANORC"
 }
