@@ -1,0 +1,21 @@
+name: Build neovim static
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build neovim
+        run: |
+          ./scripts/run-docker.sh -d ./build-package.sh -a aarch64 -I neovim
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neovim-aarch64-deb
+          path: output/*.deb
