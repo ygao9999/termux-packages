@@ -18,7 +18,8 @@ TERMUX_PKG_CONFFILES="share/nvim/sysinit.vim"
 TERMUX_PKG_AUTO_UPDATE=true
 TERMUX_PKG_UPDATE_VERSION_REGEXP="\d+\.\d+\.\d+"
 
-# 显式指定需要静态链接的库的 .a 绝对路径，让 CMake 直接使用静态库
+
+# 注意：只指定确定存在 .a 的库，utf8proc 和 msgpack 走动态链接
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 -DLUAJIT_INCLUDE_DIR=$TERMUX_PREFIX/include/luajit-2.1
 -DLPEG_LIBRARY=$TERMUX_PREFIX/lib/liblpeg-5.1.so
@@ -28,8 +29,6 @@ TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 -DLIBUV_LIBRARY=$TERMUX_PREFIX/lib/libuv.a
 -DUNIBILIUM_LIBRARY=$TERMUX_PREFIX/lib/libunibilium.a
 -DLIBVTERM_LIBRARY=$TERMUX_PREFIX/lib/libvterm.a
--DUTF8PROC_LIBRARY=$TERMUX_PREFIX/lib/libutf8proc.a
--DMSGPACK_LIBRARY=$TERMUX_PREFIX/lib/libmsgpack.a
 "
 
 termux_step_host_build() {
