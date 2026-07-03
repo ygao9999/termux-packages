@@ -8,8 +8,11 @@ TERMUX_PKG_REVISION=1
 TERMUX_PKG_SRCURL="https://github.com/neovim/neovim/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
 TERMUX_PKG_SHA256=36a6c66bfbba5d96fa512110aecddb981148a4d013b5ecd01a42877c49855a41
 
-# 依赖原生包（Termux 中这些包自带 .a 静态库文件）
+# 运行时依赖（提供头文件和 .so）
 TERMUX_PKG_DEPENDS="libandroid-support, libiconv, libmsgpack, libunibilium, libuv, libvterm, lua51-lpeg, luajit, luv, tree-sitter, tree-sitter-parsers, utf8proc"
+
+# 构建依赖：拉取对应的 -static 包，确保环境中有 .a 静态库文件
+TERMUX_PKG_BUILD_DEPENDS="libuv-static, libvterm-static, libunibilium-static"
 
 TERMUX_PKG_BREAKS="neovim-nightly"
 TERMUX_PKG_CONFLICTS="neovim-nightly"
@@ -18,8 +21,8 @@ TERMUX_PKG_CONFFILES="share/nvim/sysinit.vim"
 TERMUX_PKG_AUTO_UPDATE=true
 TERMUX_PKG_UPDATE_VERSION_REGEXP="\d+\.\d+\.\d+"
 
-
-# 注意：只指定确定存在 .a 的库，utf8proc 和 msgpack 走动态链接
+# 显式指定需要静态链接的库的 .a 绝对路径
+# 注意：只指定确定存在 .a 的库，utf8proc 和 msgpack 走默认动态链接
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 -DLUAJIT_INCLUDE_DIR=$TERMUX_PREFIX/include/luajit-2.1
 -DLPEG_LIBRARY=$TERMUX_PREFIX/lib/liblpeg-5.1.so
