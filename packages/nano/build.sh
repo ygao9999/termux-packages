@@ -23,18 +23,23 @@ TERMUX_PKG_CONFFILES="etc/nanorc"
 TERMUX_PKG_RM_AFTER_INSTALL="bin/rnano share/man/man1/rnano.1 share/nano/man-html"
 
 termux_step_pre_configure() {
-    # 临时隐藏 ncursesw 的动态库，迫使链接器在 configure 和 make 时使用静态库 (.a)
-    # 链接器在解析 -lncursesw 时，会找不到 .so，从而退而求其次寻找 .a
-    if [ -e "$TERMUX_PREFIX/lib/libncursesw.so" ]; then
-        mv "$TERMUX_PREFIX/lib/libncursesw.so" "$TERMUX_PREFIX/lib/libncursesw.so.bak"
-    fi
+    # 彻底隐藏所有 ncursesw 动态库（.so, .so.6 等），迫使链接器只能使用静态库 (.a)
+    cd "$TERMUX_PREFIX/lib"
+    for f in libncursesw.so*; do
+        if [ -e "$f" ] || [ -L "$f" ]; then
+            mv "$f" "${f}.bak"
+        fi
+    done
 }
 
 termux_step_post_make_install() {
     # 恢复被隐藏的动态库，以免影响构建环境中的其他包
-    if [ -e "$TERMUX_PREFIX/lib/libncursesw.so.bak" ]; then
-        mv "$TERMUX_PREFIX/lib/libncursesw.so.bak" "$TERMUX_PREFIX/lib/libncursesw.so"
-    fi
+    cd "$TERMUX_PREFIX/lib"
+    for f in libncursesw.so*.bak; do
+        if [ -e "$f" ] || [ -L "$f" ]; then
+            mv "$f" "${f%.bak}"
+        fi
+    done
 
     # Configure nano to use syntax highlighting:
     NANORC=$TERMUX_PREFIX/etc/nanorc
