@@ -8,10 +8,8 @@ TERMUX_PKG_REVISION=1
 TERMUX_PKG_SRCURL="https://github.com/neovim/neovim/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
 TERMUX_PKG_SHA256=36a6c66bfbba5d96fa512110aecddb981148a4d013b5ecd01a42877c49855a41
 
-# 恢复官方原生依赖（这些包自带 .a 静态库）
+# 依赖原生包，这些包在 Termux 中自带 .a 静态库文件
 TERMUX_PKG_DEPENDS="libandroid-support, libiconv, libmsgpack, libunibilium, libuv, libvterm (>= 1:0.3-0), lua51-lpeg, luajit, luv, tree-sitter, tree-sitter-parsers, utf8proc"
-
-# 不再需要任何 -static 构建依赖
 TERMUX_PKG_BUILD_DEPENDS=""
 
 TERMUX_PKG_BREAKS="neovim-nightly"
@@ -42,10 +40,7 @@ termux_step_host_build() {
 
     make CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=$TERMUX_PKG_HOSTBUILD_DIR -DUSE_BUNDLED_LUAROCKS=ON" install
 
-    # Copy away host-built libnlua0.so for use as -DNLUA0_HOST_PRG
     cp -vf ./build/lib/libnlua0.so "$TERMUX_PKG_HOSTBUILD_DIR/"
-
-    # Copy away host-built nvim for use as -DNVIM_HOST_PRG
     cp -vf ./build/bin/nvim "$TERMUX_PKG_HOSTBUILD_DIR/"
 
     make distclean
@@ -53,11 +48,11 @@ termux_step_host_build() {
 }
 
 termux_step_pre_configure() {
-    # 1. 强制 CMake 的 find_library 只搜索 .a 静态库后缀
+    # 1. 强制 CMake 的 find_library 只搜索静态库后缀
     export CMAKE_FIND_LIBRARY_SUFFIXES=".a"
     TERMUX_PKG_EXTRA_CONFIGURE_ARGS+=" -DCMAKE_FIND_LIBRARY_SUFFIXES=.a"
 
-    # 2. 隐藏需要静态链接的核心 C 库的动态库 (.so)
+    # 2. 隐藏需要静态链接的核心 C 库的动态库，防止链接器动态链接
     local _libs=(
         "libmsgpack"
         "libmsgpackc"
@@ -99,13 +94,9 @@ termux_step_post_make_install() {
     local _CONFIG_DIR=$TERMUX_PREFIX/share/nvim
     mkdir -p "$_CONFIG_DIR"
 
-    # Tree-sitter grammars are packaged separately and installed into TERMUX_PREFIX/lib/tree_sitter.
     rm -f "${TERMUX_PREFIX}"/share/nvim/runtime/parser
     ln -sf "${TERMUX_PREFIX}"/lib/tree_sitter "${TERMUX_PREFIX}"/share/nvim/runtime/parser
 
-    # Move the `nvim` binary to $PREFIX/libexec
-    # and replace it with our LD_PRELOAD shim.
-    # See: packages/neovim/nvim-shim.sh for details.
     mkdir -p "$TERMUX_PREFIX/libexec/nvim"
     mv "${TERMUX_PREFIX}"/bin/nvim "${TERMUX_PREFIX}"/libexec/nvim
     sed -e "s|@TERMUX_PREFIX@|${TERMUX_PREFIX}|g" \
@@ -113,29 +104,24 @@ termux_step_post_make_install() {
         > "${TERMUX_PREFIX}/bin/nvim"
     chmod 700 "${TERMUX_PREFIX}/bin/nvim"
 
-    # Add termux specific configuration
     sed -e "s|@TERMUX_PREFIX@|${TERMUX_PREFIX}|g" \
         "$TERMUX_PKG_BUILDER_DIR/sysinit.vim" \
         > "$_CONFIG_DIR/sysinit.vim"
 
-    { # Set up a wrapper script for `ex` to be called by `update-alternatives`
-        echo "#!$TERMUX_PREFIX/bin/sh"
-        echo "exec \"$TERMUX_PREFIX/bin/nvim\" -e \"\$@\""
+    { echo "#!$TERMUX_PREFIX/bin/sh"
+      echo "exec \"$TERMUX_PREFIX/bin/nvim\" -e \"\$@\""
     } > "$TERMUX_PREFIX/libexec/nvim/ex"
 
-    { # Set up a wrapper script for `view` to be called by `update-alternatives`
-        echo "#!$TERMUX_PREFIX/bin/sh"
-        echo "exec \"$TERMUX_PREFIX/bin/nvim\" -R \"\$@\""
+    { echo "#!$TERMUX_PREFIX/bin/sh"
+      echo "exec \"$TERMUX_PREFIX/bin/nvim\" -R \"\$@\""
     } > "$TERMUX_PREFIX/libexec/nvim/view"
 
-    { # Set up a wrapper script for `vimdiff` to be called by `update-alternatives`
-        echo "#!$TERMUX_PREFIX/bin/sh"
-        echo "exec \"$TERMUX_PREFIX/bin/nvim\" -d \"\$@\""
+    { echo "#!$TERMUX_PREFIX/bin/sh"
+      echo "exec \"$TERMUX_PREFIX/bin/nvim\" -d \"\$@\""
     } > "$TERMUX_PREFIX/libexec/nvim/vimdiff"
 
-    { # Set up a wrapper script for `vimtutor` to be called by `update-alternatives`
-        echo "#!$TERMUX_PREFIX/bin/sh"
-        echo "exec \"$TERMUX_PREFIX/bin/nvim\" +Tutor \"\$@\""
+    { echo "#!$TERMUX_PREFIX/bin/sh"
+      echo "exec \"$TERMUX_PREFIX/bin/nvim\" +Tutor \"\$@\""
     } > "$TERMUX_PREFIX/libexec/nvim/vimtutor"
     chmod 700 "$TERMUX_PREFIX/libexec/nvim/"{ex,view,vimdiff,vimtutor}
 }
