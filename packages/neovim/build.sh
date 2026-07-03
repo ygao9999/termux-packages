@@ -8,11 +8,11 @@ TERMUX_PKG_REVISION=1
 TERMUX_PKG_SRCURL="https://github.com/neovim/neovim/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
 TERMUX_PKG_SHA256=36a6c66bfbba5d96fa512110aecddb981148a4d013b5ecd01a42877c49855a41
 
-# 运行时依赖保留 lua 相关和 tree-sitter-parsers
-TERMUX_PKG_DEPENDS="libandroid-support, libiconv, libmsgpack, luajit, lua51-lpeg, luv, tree-sitter, tree-sitter-parsers"
+# 恢复官方原生依赖（这些包自带 .a 静态库）
+TERMUX_PKG_DEPENDS="libandroid-support, libiconv, libmsgpack, libunibilium, libuv, libvterm (>= 1:0.3-0), lua51-lpeg, luajit, luv, tree-sitter, tree-sitter-parsers, utf8proc"
 
-# 构建依赖：同时声明原包（提供头文件）和 -static 包（提供 .a 静态库）
-TERMUX_PKG_BUILD_DEPENDS="libuv, libuv-static, libvterm, libvterm-static, libunibilium, libunibilium-static, utf8proc, utf8proc-static, libandroid-support-static, libiconv-static"
+# 不再需要任何 -static 构建依赖
+TERMUX_PKG_BUILD_DEPENDS=""
 
 TERMUX_PKG_BREAKS="neovim-nightly"
 TERMUX_PKG_CONFLICTS="neovim-nightly"
@@ -53,11 +53,18 @@ termux_step_host_build() {
 }
 
 termux_step_pre_configure() {
-    # 仅隐藏我们确定要静态链接的核心 C 库的动态库
+    # 1. 强制 CMake 的 find_library 只搜索 .a 静态库后缀
+    export CMAKE_FIND_LIBRARY_SUFFIXES=".a"
+    TERMUX_PKG_EXTRA_CONFIGURE_ARGS+=" -DCMAKE_FIND_LIBRARY_SUFFIXES=.a"
+
+    # 2. 隐藏需要静态链接的核心 C 库的动态库 (.so)
     local _libs=(
+        "libmsgpack"
+        "libmsgpackc"
+        "libunibilium"
         "libuv"
         "libvterm"
-        "libunibilium"
+        "libtree-sitter"
         "libutf8proc"
         "libiconv"
         "libandroid-support"
@@ -76,7 +83,7 @@ termux_step_pre_configure() {
 termux_step_post_make_install() {
     # 恢复被隐藏的动态库
     cd "$TERMUX_PREFIX/lib"
-    for lib in libuv libvterm libunibilium libutf8proc libiconv libandroid-support; do
+    for lib in libmsgpack libmsgpackc libunibilium libuv libvterm libtree-sitter libutf8proc libiconv libandroid-support; do
         for f in ${lib}.so*.bak; do
             if [ -e "$f" ] || [ -L "$f" ]; then
                 mv "$f" "${f%.bak}"
