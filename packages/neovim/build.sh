@@ -50,8 +50,8 @@ termux_step_pre_configure() {
     # 1. 强制 CMake 的 find_library 只搜索静态库后缀
     export CMAKE_FIND_LIBRARY_SUFFIXES=".a"
     TERMUX_PKG_EXTRA_CONFIGURE_ARGS+=" -DCMAKE_FIND_LIBRARY_SUFFIXES=.a"
-
-    # 2. 隐藏需要静态链接的核心 C 库的动态库，防止链接器动态链接
+    # 2. 隐藏需要静态链接的核心 C 库的动态库
+    # 【注意】这里绝对不能有 libandroid-support！
     local _libs=(
         "libmsgpack"
         "libmsgpackc"
@@ -61,9 +61,7 @@ termux_step_pre_configure() {
         "libtree-sitter"
         "libutf8proc"
         "libiconv"
-        "libandroid-support"
-    )
-    
+    )    
     cd "$TERMUX_PREFIX/lib"
     for lib in "${_libs[@]}"; do
         for f in ${lib}.so*; do
@@ -73,18 +71,17 @@ termux_step_pre_configure() {
         done
     done
 }
-
 termux_step_post_make_install() {
     # 恢复被隐藏的动态库
+    # 【注意】这里也不能有 libandroid-support！
     cd "$TERMUX_PREFIX/lib"
-    for lib in libmsgpack libmsgpackc libunibilium libuv libvterm libtree-sitter libutf8proc libiconv libandroid-support; do
+    for lib in libmsgpack libmsgpackc libunibilium libuv libvterm libtree-sitter libutf8proc libiconv; do
         for f in ${lib}.so*.bak; do
             if [ -e "$f" ] || [ -L "$f" ]; then
                 mv "$f" "${f%.bak}"
             fi
         done
     done
-
     # 打印二进制依赖，方便验证
     echo "========== NVIM BINARY DEPENDENCIES =========="
     ${READELF:-readelf} -d "$TERMUX_PREFIX/libexec/nvim/nvim" || true
