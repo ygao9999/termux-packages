@@ -1,0 +1,23 @@
+name: Build vim static
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+
+      - name: Build vim
+        run: |
+          ./scripts/run-docker.sh -d ./build-package.sh -a aarch64 -I vim
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vim-aarch64-deb
+          path: output/*.deb
