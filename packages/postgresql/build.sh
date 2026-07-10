@@ -50,6 +50,16 @@ termux_step_pre_configure() {
 	if $TERMUX_ON_DEVICE_BUILD; then
 		termux_error_exit "Package '$TERMUX_PKG_NAME' is not safe for on-device builds."
 	fi
+
+	# ---------- 新增部分：静态链接外部依赖库，保留系统库动态 ----------
+	# 目标：将 OpenSSL, ICU, libxml2, readline, uuid, zlib 静态链接进主程序，
+	#       而 libc, libm, libdl, libpthread 等保持动态，确保 Android 兼容性。
+	# 原理：使用链接器选项 -Wl,-Bstatic ... -Wl,-Bdynamic 包裹需要静态的库。
+	# 注意：必须确保这些库的静态版本 (.a) 已安装（Termux 默认提供）。
+	export LDFLAGS="$LDFLAGS -Wl,-Bstatic -lssl -lcrypto -licuuc -licui18n -licudata -lxml2 -lreadline -luuid -lz -Wl,-Bdynamic"
+	# 若需追加其他静态库，可在此继续添加。
+	# 注意：-licudata 有时可能不需要，但加上无妨；libxml2 可能依赖 -lm，但 -lm 会在动态区自动链接。
+	# ---------- 新增结束 ----------
 }
 
 termux_step_post_make_install() {
