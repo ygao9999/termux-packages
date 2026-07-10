@@ -39,21 +39,27 @@ termux_step_pre_configure() {
     fi
 }
 
-# 定义静态链接所需的 LDFLAGS（在 configure 之后使用，避免干扰配置测试）
-# 注意：此变量将在后续 make 阶段被显式传递
+# 定义静态链接所需的 LDFLAGS（configure 之后使用，避免干扰配置测试）
 STATIC_LDFLAGS="-L$TERMUX_PREFIX/lib -Wl,-Bstatic -lssl -lcrypto -licuuc -licui18n -licudata -lxml2 -lreadline -luuid -lz -Wl,-Bdynamic"
 
 termux_step_post_configure() {
-    # 将静态链接标志保存为环境变量，供后续 make 使用
     export LDFLAGS="$STATIC_LDFLAGS"
+    # 避免在目标构建中重新编译 zic（主机工具），直接复用 host build 的二进制
+    # 这样 make 会认为 zic 已最新，跳过编译和链接，从而避免静态库找不到的错误
+    if [ -f "${TERMUX_PKG_HOSTBUILD_DIR}/src/timezone/zic" ]; then
+        mkdir -p "${TERMUX_PKG_BUILDDIR}/src/timezone"
+        cp -f "${TERMUX_PKG_HOSTBUILD_DIR}/src/timezone/zic" "${TERMUX_PKG_BUILDDIR}/src/timezone/zic"
+        touch "${TERMUX_PKG_BUILDDIR}/src/timezone/zic"
+    else
+        echo "Warning: Host zic not found, may cause build issues."
+    fi
 }
 
-# 重写 make 步骤，显式传递 LDFLAGS
 termux_step_make() {
+    # 显式传递 LDFLAGS 给 make，确保静态链接生效
     make -j ${TERMUX_PKG_MAKE_PROCESSES} LDFLAGS="$LDFLAGS"
 }
 
-# 重写 make install 步骤，同样传递 LDFLAGS（虽然安装通常不链接，但为了保险）
 termux_step_make_install() {
     make -j ${TERMUX_PKG_MAKE_PROCESSES} install LDFLAGS="$LDFLAGS"
 }
@@ -62,7 +68,7 @@ termux_step_post_make_install() {
     # 安装手册页
     make -C doc/src/sgml install-man
 
-    # 编译并安装 contrib 扩展（需确保每个扩展的链接也使用静态库）
+    # 编译并安装 contrib 扩展（同样传递 LDFLAGS，确保静态链接）
     for contrib in \
         btree_gin \
         btree_gist \
