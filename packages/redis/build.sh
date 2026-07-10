@@ -19,7 +19,8 @@ termux_step_pre_configure() {
 
 	CPPFLAGS+=" -DHAVE_BACKTRACE"
 	CFLAGS+=" $CPPFLAGS"
-	LDFLAGS+=" -landroid-execinfo -landroid-glob"
+	# 强制静态链接 libandroid-execinfo 和 libandroid-glob
+	LDFLAGS+=" -Wl,-Bstatic -landroid-execinfo -landroid-glob -Wl,-Bdynamic"
 }
 
 termux_step_post_make_install() {
