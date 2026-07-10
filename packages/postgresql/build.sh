@@ -44,24 +44,28 @@ termux_step_pre_configure() {
 STATIC_LIBRARIES="-L$TERMUX_PREFIX/lib -l:libssl.a -l:libcrypto.a -l:libicuuc.a -l:libicui18n.a -l:libicudata.a -l:libxml2.a -l:libreadline.a -l:libuuid.a -l:libz.a"
 
 termux_step_post_configure() {
-    # 导出 LDFLAGS 以包含静态库，但注意 Makefile 可能会附加其他库，
-    # 我们将在 make 步骤中通过 LIBS 变量额外传递，避免冲突。
-    export LDFLAGS="$STATIC_LIBRARIES"
-    # 同时设置 LIBS，供 Makefile 的库列表使用
-    export LIBS="$STATIC_LIBRARIES"
+    # 查找并收集静态库的绝对路径
+    local STATIC_LIBS=""
+    for libname in ssl crypto icuuc icui18n icudata xml2 readline uuid z; do
+        local libfile=$(find $TERMUX_PREFIX -name "lib${libname}.a" -print -quit 2>/dev/null)
+        if [ -z "$libfile" ]; then
+            echo "Error: Static library lib${libname}.a not found under $TERMUX_PREFIX"
+            exit 1
+        fi
+        STATIC_LIBS="$STATIC_LIBS $libfile"
+    done
 
-    # 复用主机构建的 zic，避免在目标构建中重新编译链接（防止静态库缺失错误）
+    export LDFLAGS="$LDFLAGS $STATIC_LIBS"
+    export LIBS="$STATIC_LIBS"
+
+    # 复用主机 zic
     if [ -f "${TERMUX_PKG_HOSTBUILD_DIR}/src/timezone/zic" ]; then
         mkdir -p "${TERMUX_PKG_BUILDDIR}/src/timezone"
         cp -f "${TERMUX_PKG_HOSTBUILD_DIR}/src/timezone/zic" "${TERMUX_PKG_BUILDDIR}/src/timezone/zic"
         touch "${TERMUX_PKG_BUILDDIR}/src/timezone/zic"
     else
-        echo "Warning: Host zic not found, may cause build issues."
+        echo "Warning: Host zic not found"
     fi
-
-    # 可选：打印库是否存在，便于调试
-    echo "Checking static libraries in $TERMUX_PREFIX/lib:"
-    ls -l $TERMUX_PREFIX/lib/libssl.a $TERMUX_PREFIX/lib/libcrypto.a $TERMUX_PREFIX/lib/libicuuc.a $TERMUX_PREFIX/lib/libicui18n.a $TERMUX_PREFIX/lib/libicudata.a $TERMUX_PREFIX/lib/libxml2.a $TERMUX_PREFIX/lib/libreadline.a $TERMUX_PREFIX/lib/libuuid.a $TERMUX_PREFIX/lib/libz.a || true
 }
 
 termux_step_make() {
