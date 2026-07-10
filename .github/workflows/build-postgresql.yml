@@ -1,7 +1,7 @@
 name: Build PostgreSQL static (partial)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:          # 手动触发
 
 jobs:
   build:
@@ -10,11 +10,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare package definition
-        run: |
-          mkdir -p packages/postgresql
-          cp build.sh packages/postgresql/build.sh
-
+      # 直接使用已存在的 packages/postgresql/build.sh，无需复制
       - name: Build PostgreSQL
         run: |
           ./scripts/run-docker.sh -d ./build-package.sh -a aarch64 -I postgresql
