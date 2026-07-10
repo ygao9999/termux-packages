@@ -39,13 +39,18 @@ termux_step_pre_configure() {
     fi
 }
 
-# 定义静态链接所需的 LDFLAGS（configure 之后使用，避免干扰配置测试）
-STATIC_LDFLAGS="-L$TERMUX_PREFIX/lib -Wl,-Bstatic -lssl -lcrypto -licuuc -licui18n -licudata -lxml2 -lreadline -luuid -lz -Wl,-Bdynamic"
+# 定义静态链接所需的库（使用 -l: 强制指定静态库文件名，避免依赖 -Bstatic）
+# 同时保留 -L 指定路径，确保链接器能找到这些 .a 文件
+STATIC_LIBRARIES="-L$TERMUX_PREFIX/lib -l:libssl.a -l:libcrypto.a -l:libicuuc.a -l:libicui18n.a -l:libicudata.a -l:libxml2.a -l:libreadline.a -l:libuuid.a -l:libz.a"
 
 termux_step_post_configure() {
-    export LDFLAGS="$STATIC_LDFLAGS"
-    # 避免在目标构建中重新编译 zic（主机工具），直接复用 host build 的二进制
-    # 这样 make 会认为 zic 已最新，跳过编译和链接，从而避免静态库找不到的错误
+    # 导出 LDFLAGS 以包含静态库，但注意 Makefile 可能会附加其他库，
+    # 我们将在 make 步骤中通过 LIBS 变量额外传递，避免冲突。
+    export LDFLAGS="$STATIC_LIBRARIES"
+    # 同时设置 LIBS，供 Makefile 的库列表使用
+    export LIBS="$STATIC_LIBRARIES"
+
+    # 复用主机构建的 zic，避免在目标构建中重新编译链接（防止静态库缺失错误）
     if [ -f "${TERMUX_PKG_HOSTBUILD_DIR}/src/timezone/zic" ]; then
         mkdir -p "${TERMUX_PKG_BUILDDIR}/src/timezone"
         cp -f "${TERMUX_PKG_HOSTBUILD_DIR}/src/timezone/zic" "${TERMUX_PKG_BUILDDIR}/src/timezone/zic"
@@ -53,22 +58,26 @@ termux_step_post_configure() {
     else
         echo "Warning: Host zic not found, may cause build issues."
     fi
+
+    # 可选：打印库是否存在，便于调试
+    echo "Checking static libraries in $TERMUX_PREFIX/lib:"
+    ls -l $TERMUX_PREFIX/lib/libssl.a $TERMUX_PREFIX/lib/libcrypto.a $TERMUX_PREFIX/lib/libicuuc.a $TERMUX_PREFIX/lib/libicui18n.a $TERMUX_PREFIX/lib/libicudata.a $TERMUX_PREFIX/lib/libxml2.a $TERMUX_PREFIX/lib/libreadline.a $TERMUX_PREFIX/lib/libuuid.a $TERMUX_PREFIX/lib/libz.a || true
 }
 
 termux_step_make() {
-    # 显式传递 LDFLAGS 给 make，确保静态链接生效
-    make -j ${TERMUX_PKG_MAKE_PROCESSES} LDFLAGS="$LDFLAGS"
+    # 显式传递 LDFLAGS 和 LIBS，确保静态库被正确链接
+    make -j ${TERMUX_PKG_MAKE_PROCESSES} LDFLAGS="$LDFLAGS" LIBS="$LIBS"
 }
 
 termux_step_make_install() {
-    make -j ${TERMUX_PKG_MAKE_PROCESSES} install LDFLAGS="$LDFLAGS"
+    make -j ${TERMUX_PKG_MAKE_PROCESSES} install LDFLAGS="$LDFLAGS" LIBS="$LIBS"
 }
 
 termux_step_post_make_install() {
     # 安装手册页
     make -C doc/src/sgml install-man
 
-    # 编译并安装 contrib 扩展（同样传递 LDFLAGS，确保静态链接）
+    # 编译并安装 contrib 扩展，同样传递 LDFLAGS 和 LIBS
     for contrib in \
         btree_gin \
         btree_gist \
@@ -87,6 +96,6 @@ termux_step_post_make_install() {
         unaccent \
         uuid-ossp \
         ; do
-        (make -C contrib/${contrib} -s -j ${TERMUX_PKG_MAKE_PROCESSES} install LDFLAGS="$LDFLAGS")
+        (make -C contrib/${contrib} -s -j ${TERMUX_PKG_MAKE_PROCESSES} install LDFLAGS="$LDFLAGS" LIBS="$LIBS")
     done
 }
