@@ -1,54 +1,26 @@
-name: Build PostgreSQL for Termux
+name: Build PostgreSQL static (partial)
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:        # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    container:
-      # 使用 Termux 官方打包构建镜像，内含交叉编译工具链和依赖
-      image: termux/package-builder:latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare package directory
+      - name: Prepare package definition
         run: |
-          # 若仓库根目录直接包含 packages/ 子目录，则无需此步
-          # 此处假设您在根目录下有一个 packages/postgresql/build.sh
-          # 若没有，请根据实际结构调整
           mkdir -p packages/postgresql
-          # 如果您的 build.sh 在仓库根目录，可复制过去
-          cp build.sh packages/postgresql/ 2>/dev/null || true
-          # 也可直接链接，但这里为了示例，确保路径存在
-          if [ ! -f packages/postgresql/build.sh ]; then
-            echo "ERROR: packages/postgresql/build.sh not found!"
-            exit 1
-          fi
+          cp build.sh packages/postgresql/build.sh
 
-      - name: Build package
+      - name: Build PostgreSQL
         run: |
-          # 进入 Termux 包构建脚本目录
-          cd packages/postgresql
-          # 构建命令：termux-build 会自动解析 build.sh
-          termux-build postgresql
+          ./scripts/run-docker.sh -d ./build-package.sh -a aarch64 -I postgresql
 
-      - name: Upload built .deb artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: postgresql-deb
-          # Termux 构建的 deb 文件通常位于 $HOME/.termux-build/_cache/ 或对应输出目录
-          # 实际路径可能是：$HOME/.termux-build/postgresql/ 下的 .deb 文件
-          # 这里采用通配符查找，并限制为只抓取新构建的包
-          path: |
-            /home/builder/.termux-build/postgresql/*.deb
-            /home/builder/.termux-build/_cache/*.deb
-          if-no-files-found: error
-          retention-days: 7
+          name: postgresql-aarch64-deb
+          path: output/*.deb
