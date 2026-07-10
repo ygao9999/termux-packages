@@ -28,30 +28,41 @@ TERMUX_PKG_REPLACES="postgresql-contrib (<= 10.3-1), postgresql-dev"
 TERMUX_PKG_SERVICE_SCRIPT=("postgres" "mkdir -p ~/.postgres\nif [ -f \"~/.postgres/postgresql.conf\" ]; then DATADIR=\"~/.postgres\"; else DATADIR=\"$TERMUX_PREFIX/var/lib/postgresql\"; fi\nexec postgres -D \$DATADIR 2>&1")
 
 termux_step_host_build() {
-    # Build a native zic binary with symlinks instead of hard links
+    # 构建本机 zic 工具（使用符号链接代替硬链接）
     $TERMUX_PKG_SRCDIR/configure --without-readline
     make -j "${TERMUX_PKG_MAKE_PROCESSES}"
 }
 
 termux_step_pre_configure() {
-    # Ensure on-device build is forbidden
     if $TERMUX_ON_DEVICE_BUILD; then
         termux_error_exit "Package '$TERMUX_PKG_NAME' is not safe for on-device builds."
     fi
 }
 
-# 关键修改：将静态链接的 LDFLAGS 移到 configure 之后，避免干扰配置检测
+# 定义静态链接所需的 LDFLAGS（在 configure 之后使用，避免干扰配置测试）
+# 注意：此变量将在后续 make 阶段被显式传递
+STATIC_LDFLAGS="-L$TERMUX_PREFIX/lib -Wl,-Bstatic -lssl -lcrypto -licuuc -licui18n -licudata -lxml2 -lreadline -luuid -lz -Wl,-Bdynamic"
+
 termux_step_post_configure() {
-    # 静态链接 OpenSSL, ICU, libxml2, readline, uuid, zlib
-    # 保留系统库（libc, libm, dl 等）动态链接，确保 Android 兼容
-    export LDFLAGS="$LDFLAGS -L$TERMUX_PREFIX/lib -Wl,-Bstatic -lssl -lcrypto -licuuc -licui18n -licudata -lxml2 -lreadline -luuid -lz -Wl,-Bdynamic"
+    # 将静态链接标志保存为环境变量，供后续 make 使用
+    export LDFLAGS="$STATIC_LDFLAGS"
+}
+
+# 重写 make 步骤，显式传递 LDFLAGS
+termux_step_make() {
+    make -j ${TERMUX_PKG_MAKE_PROCESSES} LDFLAGS="$LDFLAGS"
+}
+
+# 重写 make install 步骤，同样传递 LDFLAGS（虽然安装通常不链接，但为了保险）
+termux_step_make_install() {
+    make -j ${TERMUX_PKG_MAKE_PROCESSES} install LDFLAGS="$LDFLAGS"
 }
 
 termux_step_post_make_install() {
-    # Install manual pages
+    # 安装手册页
     make -C doc/src/sgml install-man
 
-    # Build and install contrib extensions
+    # 编译并安装 contrib 扩展（需确保每个扩展的链接也使用静态库）
     for contrib in \
         btree_gin \
         btree_gist \
@@ -70,6 +81,6 @@ termux_step_post_make_install() {
         unaccent \
         uuid-ossp \
         ; do
-        (make -C contrib/${contrib} -s -j ${TERMUX_PKG_MAKE_PROCESSES} install)
+        (make -C contrib/${contrib} -s -j ${TERMUX_PKG_MAKE_PROCESSES} install LDFLAGS="$LDFLAGS")
     done
 }
