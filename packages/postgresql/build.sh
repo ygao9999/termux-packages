@@ -67,13 +67,17 @@ TERMUX_PKG_SHA256=5245bd1b79700d55b8e0575be0325ef61e7bbef627e6a616e4cf36ad4687be
 TERMUX_PKG_BUILD_DEPENDS="openssl-static, readline-static, libicu-static, zlib-static, ossp-uuid-static, libxml2-static, ncurses-static, libiconv-static, flex, bison, perl"
 
 # 运行期动态依赖（用户 pkg install 时会被 termux 自动拉取）：
-#   libandroid-execinfo  → backtrace() 系列（Android libc 缺失）
-#   libandroid-shmem     → shm_open/shm_unlink（PG 共享内存需要）
-#   libandroid-pos-sem   → POSIX 信号量（USE_UNNAMED_POSIX_SEMAPHORES=1
-#                          用的是 unnamed sem，但仍可能需要 sem_open
-#                          等 named sem；如该包不存在可删）
+#   libandroid-execinfo        → backtrace() 系列（Android libc 缺失）
+#   libandroid-shmem           → shm_open/shm_unlink（PG 共享内存需要）
+#   libandroid-posix-semaphore → POSIX named semaphore 支持（sem_open/
+#                                sem_close/sem_unlink）。注意本配方用了
+#                                USE_UNNAMED_POSIX_SEMAPHORES=1，理论上
+#                                postgres 自身不需要 named semaphore，但
+#                                保留这个依赖以防某个 contrib 模块或链接
+#                                探测阶段仍引用了这些符号。若确认完全用
+#                                不到，可以安全删除这一项。
 # 注意：ncurses 已从运行期依赖中移除，因为 libncursesw.a 已静态链接进二进制
-TERMUX_PKG_DEPENDS="libandroid-execinfo, libandroid-shmem, libandroid-pos-sem"
+TERMUX_PKG_DEPENDS="libandroid-execinfo, libandroid-shmem, libandroid-posix-semaphore"
 
 # ----- configure args -----
 # 改动 #2: --with-uuid=ossp 替代 --with-uuid=e2fs
