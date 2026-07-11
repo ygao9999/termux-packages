@@ -27,6 +27,13 @@ TERMUX_PKG_EXTRA_CONFIGURE_ARGS+="
 	-Dhistory=enabled
 	-Dreadline=enabled
 "
+# LOCAL PATCH: also build the static .a alongside the existing .so.
+# default_library=both keeps every existing shared-lib consumer working
+# exactly as before; the .a is a pure addition packaged separately as
+# libxml2-static (see libxml2-static.subpackage.sh).
+TERMUX_PKG_EXTRA_CONFIGURE_ARGS+="
+	-Ddefault_library=both
+"
 TERMUX_PKG_RM_AFTER_INSTALL="
 share/doc/libxml2/html
 share/doc/libxml2/xmlcatalog.html
@@ -36,20 +43,17 @@ TERMUX_PKG_DEPENDS="libandroid-glob, libiconv, libicu, zlib"
 TERMUX_PKG_BUILD_DEPENDS="doxygen, python, readline"
 TERMUX_PKG_BREAKS="libxml2-dev"
 TERMUX_PKG_REPLACES="libxml2-dev"
-
 termux_step_host_build() {
 	if [[ "$TERMUX_ON_DEVICE_BUILD" == "false" ]]; then
 		# We need doxygen, other packages are it's dependencies
 		termux_download_ubuntu_packages doxygen libfmt10 libspdlog1.15 libxapian30
 	fi
 }
-
 termux_step_configure() {
 	if [[ "$TERMUX_ON_DEVICE_BUILD" == "false" ]]; then
 		export LD_LIBRARY_PATH="$TERMUX_PKG_HOSTBUILD_DIR/ubuntu_packages/usr/lib/x86_64-linux-gnu"
 		export PATH="$TERMUX_PKG_HOSTBUILD_DIR/ubuntu_packages/usr/bin:$PATH"
 	fi
-
 	LDFLAGS+=" -landroid-glob"
 	# This directory is usually made by doxygen
 	# and python/generator.py expects it to be there.
@@ -59,13 +63,11 @@ termux_step_configure() {
 	export TERMUX_MESON_ENABLE_SOVERSION=1
 	termux_step_configure_meson
 }
-
 termux_step_post_massage() {
 	# Check if SONAME is properly set:
 	if ! readelf -d lib/libxml2.so | grep -q '(SONAME).*\[libxml2\.so\.'; then
 		termux_error_exit "SONAME for libxml2.so is not properly set."
 	fi
-
 	# If this has been bumped, remember to rebuild all reverse dependencies of libxml2!
 	# `./scripts/bin/revbump --dependencies libxml2` can find them for you.
 	local _SOVERSION=16
@@ -73,5 +75,11 @@ termux_step_post_massage() {
 		echo "ERROR - Expected: lib/libxml2.so.${_SOVERSION}" >&2
 		echo "ERROR - Found   : $(find lib/libxml2* -regex '.*so\.[0-9]+')" >&2
 		termux_error_exit "Not proceeding with update."
+	fi
+	# LOCAL PATCH: sanity-check that default_library=both actually produced
+	# the static archive before the libxml2-static subpackage tries to pick
+	# it up. Fail loudly rather than silently shipping an empty subpackage.
+	if [[ ! -e "lib/libxml2.a" ]]; then
+		termux_error_exit "Expected lib/libxml2.a (static) to exist with default_library=both, but it's missing."
 	fi
 }
