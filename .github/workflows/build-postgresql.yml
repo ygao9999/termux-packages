@@ -1,136 +1,279 @@
-name: "Build postgresql (static libs, aarch64)"
+# ============================================================
+# GitHub Actions workflow: build postgresql 18.2 (aarch64) for Termux
+#
+# 仓库前提：
+#   - 本仓库是 termux/termux-packages 的 fork
+#   - packages/postgresql/build.sh 已修改为静态链接版本
+#   - packages/libxml2/build.sh 已启用 -static 子包
+#     （如未修改，本 workflow 会自动用 sed 临时改）
+#   - 本文件放在 .github/workflows/build-postgresql.yml
+#
+# 编译平台：
+#   termux 官方编译平台（termux/package-builder Docker 镜像）
+#   通过 scripts/run-docker.sh 启动，跟 termux 官方 CI 完全一致
+#
+# 流程（10 步）：
+#   1. checkout fork 仓库
+#   2. 确保 libxml2/build.sh 启用了 -static 子包（幂等 sed）
+#   3. setup docker（run-docker.sh 依赖）
+#   4. 缓存 ccache + docker 镜像（加速二次构建）
+#   5. build libxml2 → 产出 libxml2-static_*.deb 到 output/
+#   6. 验证 libxml2-static deb 含 libxml2.a
+#   7. build postgresql → 自动从 output/ 拉 libxml2-static
+#   8. 失败时收集 config.log 用于排查
+#   9. 验证 postgresql deb 产出 + Depends 字段检查
+#  10. 上传 postgresql deb + libxml2-static deb 作为 artifact
+#
+# 触发方式：
+#   - 手动 dispatch（支持版本号覆盖）
+#   - push 到 main/master 且 packages/postgresql/ 有改动
+#   - PR 触发
+#   - 每周日凌晨 3 点定时
+# ============================================================
+
+name: Build postgresql (aarch64)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      pg_version:
+        description: 'PostgreSQL version override (empty = use build.sh default)'
+        required: false
+        default: ''
   push:
-    branches:
-      - "**"
+    branches: [main, master]
     paths:
-      - "packages/postgresql/**"
-      - "packages/libxml2/**"
-      - ".github/workflows/build-postgresql.yml"
+      - 'packages/postgresql/**'
+      - 'packages/libxml2/**'
+      - '.github/workflows/build-postgresql.yml'
+  pull_request:
+    paths:
+      - 'packages/postgresql/**'
+      - 'packages/libxml2/**'
+      - '.github/workflows/build-postgresql.yml'
+  schedule:
+    # 每周日凌晨 3 点 (Asia/Shanghai = UTC 19:00 周六)
+    - cron: '0 19 * * 6'
+
+# 防止并发构建互相覆盖 output/
+concurrency:
+  group: build-postgresql-aarch64
+  cancel-in-progress: false
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+  TARGET_ARCH: aarch64
 
 jobs:
-  build-postgresql:
-    runs-on: ubuntu-24.04
+  build:
+    name: Build postgresql for aarch64
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
     steps:
-      - name: Checkout
+      # ----------------------------------------------------------
+      # 1. checkout fork 仓库（含全部 termux-packages 源码 + 我们的修改）
+      # ----------------------------------------------------------
+      - name: Checkout fork
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Free up disk space
-        shell: bash
+      # ----------------------------------------------------------
+      # 2. 如果 dispatch 输入了版本号，覆盖 TERMUX_PKG_VERSION
+      # ----------------------------------------------------------
+      - name: Override PG version (if specified)
         run: |
-          set -euxo pipefail
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
-          df -h
-
-      # libxml2-static isn't an official Termux package (see packages/libxml2
-      # build.sh: we patched default_library=both there). postgresql depends
-      # on it via TERMUX_PKG_BUILD_DEPENDS, so it must be built first in the
-      # same run and be available for build-package.sh to pick up locally.
-      - name: Build libxml2 (provides libxml2-static, a postgresql build-dep)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          ./scripts/run-docker.sh -d ./build-package.sh -I -C -a aarch64 libxml2
-
-      - name: List libxml2 output so far
-        shell: bash
-        run: |
-          set -euxo pipefail
-          find ./output -iname "*.deb" -print
-
-      # CONFIRMED (not a guess): -i/-I only applies to TERMUX_PKG_DEPENDS
-      # (runtime deps). flex is one of postgresql's TERMUX_PKG_BUILD_DEPENDS
-      # (build-time only), and those are always compiled locally regardless
-      # of -i/-I -- this was verified by removing a standalone "build flex"
-      # step and observing flex still got compiled from source as part of
-      # postgresql's own build. So this patch is necessary, not optional.
-      #
-      # flex fails to compile in this environment: its bundled gnulib
-      # malloc.c compatibility shim declares `void *malloc();` (old K&R
-      # style, no prototype) which conflicts with the compiler's builtin
-      # malloc() declaration on newer gcc/clang, turning what used to be a
-      # warning into a hard error ("too many arguments to function malloc").
-      # This is a known upstream/gnulib issue unrelated to our postgresql
-      # changes. It happens during flex's *host* build stage
-      # (TERMUX_PKG_HOSTBUILD=true; visible as `stage1flex-malloc.o` in the
-      # log), which is compiled with plain `gcc`, not the aarch64 cross
-      # compiler, and is configured via $TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS
-      # rather than the target-stage termux_step_pre_configure hook.
-      #
-      # flex's build.sh invokes configure with an *unquoted* expansion of
-      # that variable, so bash word-splits it on whitespace into separate
-      # configure arguments. A single whitespace-free "CFLAGS=..." token is
-      # treated as one VAR=value assignment; anything with an embedded
-      # space splits into extra tokens that configure doesn't recognize as
-      # flags of its own and rejects with "unrecognized option" (verified
-      # locally against a real autoconf-generated configure script before
-      # settling on this fix). We therefore replace the existing
-      # CFLAGS=-D_GNU_SOURCE=1 (an old Ubuntu 17.10-specific workaround,
-      # irrelevant on the ubuntu-24.04 runner used here) with our own single
-      # flag rather than trying to append to it.
-      - name: Patch flex build.sh to work around gnulib malloc.c compile error (host build stage)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          FLEX_BUILD_SH="packages/flex/build.sh"
-          if [ ! -f "$FLEX_BUILD_SH" ]; then
-            echo "ERROR: $FLEX_BUILD_SH not found" >&2
-            exit 1
-          fi
-          echo "=== Before patch ==="
-          grep -n "TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS" "$FLEX_BUILD_SH"
-          sed -i \
-            's/TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS="CFLAGS=-D_GNU_SOURCE=1"/TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS="CFLAGS=-Wno-error=builtin-declaration-mismatch"/' \
-            "$FLEX_BUILD_SH"
-          echo "=== After patch ==="
-          grep -n "TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS" "$FLEX_BUILD_SH"
-          if ! grep -q "builtin-declaration-mismatch" "$FLEX_BUILD_SH"; then
-            echo "ERROR: sed did not find the expected line to patch. flex/build.sh may have changed upstream." >&2
-            exit 1
+          if [ -n "${{ github.event.inputs.pg_version }}" ]; then
+            sed -i "s|^TERMUX_PKG_VERSION=.*|TERMUX_PKG_VERSION=\"${{ github.event.inputs.pg_version }}\"|" \
+              packages/postgresql/build.sh
+            sed -i "s|^TERMUX_PKG_SHA256=.*|TERMUX_PKG_SHA256=SKIP_CHECK|" \
+              packages/postgresql/build.sh
+            echo "⚠️ 已覆盖版本为 ${{ github.event.inputs.pg_version }}，SHA256 跳过校验"
           fi
 
-      - name: Build postgresql (partial static link against 8 static libs)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          ./scripts/run-docker.sh -d ./build-package.sh -I -C -a aarch64 postgresql
+          echo "=== packages/postgresql/build.sh head ==="
+          head -20 packages/postgresql/build.sh
 
-      - name: List produced .deb files
-        shell: bash
+      # ----------------------------------------------------------
+      # 3. 确保 libxml2/build.sh 启用了 -static 子包
+      #    幂等操作：已改过则跳过，未改过则临时改（不提交）
+      #    （官方默认 TERMUX_PKG_NO_STATICSPLIT=true，需要改成 false）
+      # ----------------------------------------------------------
+      - name: Ensure libxml2-static subpackage enabled
         run: |
-          set -euxo pipefail
-          find ./output -iname "*.deb" -print
-          find ./output -iname "*.deb" -exec sha256sum {} \;
+          cd packages/libxml2
+          echo "=== Before ==="
+          grep -E "NO_STATICSPLIT|TERMUX_PKG_VERSION" build.sh || true
 
-      # Sanity-check that postgresql's runtime Depends field is clean: the 8
-      # libs we statically linked must NOT show up there, otherwise the
-      # partial-static-link step silently fell back to dynamic linking
-      # somewhere and installing postgresql.deb alone (without those -static
-      # packages) would break on a device that doesn't have them.
-      - name: Inspect postgresql package dependencies
-        shell: bash
-        run: |
-          set -euxo pipefail
-          DEB=$(find ./output -iname "postgresql_*_aarch64.deb" | head -1)
-          if [ -z "$DEB" ]; then
-            echo "ERROR: no postgresql_*.deb produced" >&2
-            exit 1
-          fi
-          echo "Found: $DEB"
-          dpkg-deb -f "$DEB" Depends
-          echo "--- checking that statically-linked libs are absent from Depends ---"
-          if dpkg-deb -f "$DEB" Depends | grep -Ei "openssl|readline|libicu|zlib|uuid|libxml2|ncurses|libiconv"; then
-            echo "WARNING: a supposedly-static lib appears in runtime Depends; partial static link may not have applied as expected." >&2
+          if grep -q "TERMUX_PKG_NO_STATICSPLIT=false" build.sh; then
+            echo "✅ libxml2/build.sh 已启用 -static 子包，跳过"
           else
-            echo "OK: runtime Depends is clean of the 8 statically-linked libs."
+            # 删掉旧的 NO_STATICSPLIT 行（不论值）
+            sed -i '/TERMUX_PKG_NO_STATICSPLIT/d' build.sh
+            # 显式声明启用静态子包
+            echo "" >> build.sh
+            echo "# 启用静态库子包（postgresql 静态链接需要）" >> build.sh
+            echo "TERMUX_PKG_NO_STATICSPLIT=false" >> build.sh
+            echo "ℹ️ 已临时启用 -static 子包（不提交到仓库）"
           fi
 
-      - name: Upload built .deb files
-        if: always()
+          echo "=== After ==="
+          grep -E "NO_STATICSPLIT|TERMUX_PKG_VERSION" build.sh || true
+
+      # ----------------------------------------------------------
+      # 4. Setup Docker（termux run-docker.sh 依赖）
+      # ----------------------------------------------------------
+      - name: Set up Docker
+        uses: docker/setup-docker-action@v4
+
+      # ----------------------------------------------------------
+      # 5. 缓存：ccache + termux docker 镜像（加速二次构建）
+      # ----------------------------------------------------------
+      - name: ccache cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-aarch64-postgresql-${{ hashFiles('packages/postgresql/build.sh') }}
+          restore-keys: |
+            ccache-aarch64-postgresql-
+            ccache-aarch64-
+
+      - name: Docker image cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-image
+          key: termux-package-builder-image-v1
+
+      - name: Load cached docker image (if exists)
+        run: |
+          if [ -f /tmp/docker-image/termux-builder.tar ]; then
+            docker load -i /tmp/docker-image/termux-builder.tar
+            echo "✅ Loaded cached termux image"
+          else
+            echo "ℹ️ No cached image, run-docker.sh will pull fresh"
+          fi
+
+      # ----------------------------------------------------------
+      # 6. Build libxml2（产出 libxml2 + libxml2-static deb 到 output/）
+      #    使用 termux 官方编译平台：./scripts/run-docker.sh
+      # ----------------------------------------------------------
+      - name: Build libxml2 (creates libxml2-static subpackage)
+        run: |
+          # -i: install dependencies from local output/ or apt
+          # -f: force rebuild even if deb exists in output/
+          # -a: target architecture
+          ./scripts/run-docker.sh ./build-package.sh -i -f -a ${{ env.TARGET_ARCH }} libxml2
+
+          echo "=== libxml2 debs in output/ ==="
+          ls -lh output/libxml2*_${{ env.TARGET_ARCH }}.deb
+
+      # ----------------------------------------------------------
+      # 7. 验证 libxml2-static deb 确实产出且含 libxml2.a
+      # ----------------------------------------------------------
+      - name: Verify libxml2-static deb
+        run: |
+          if ! ls output/libxml2-static_*_${{ env.TARGET_ARCH }}.deb 2>/dev/null; then
+            echo "❌ libxml2-static_*.deb 未生成"
+            echo "请检查 packages/libxml2/build.sh 是否启用了 NO_STATICSPLIT=false"
+            exit 1
+          fi
+
+          echo "=== libxml2-static 内容验证 ==="
+          cd /tmp && rm -rf verify && mkdir verify && cd verify
+          ar x $GITHUB_WORKSPACE/output/libxml2-static_*_${{ env.TARGET_ARCH }}.deb
+          tar -tJvf data.tar.xz | head -20
+
+          if ! tar -tJf data.tar.xz | grep -q "libxml2.a"; then
+            echo "❌ libxml2-static 不包含 libxml2.a"
+            exit 1
+          fi
+          echo "✅ libxml2.a found in static subpackage"
+
+      # ----------------------------------------------------------
+      # 8. Build postgresql（自动从 output/ 拉取 libxml2-static）
+      # ----------------------------------------------------------
+      - name: Build postgresql
+        run: |
+          ./scripts/run-docker.sh ./build-package.sh -i -f -a ${{ env.TARGET_ARCH }} postgresql
+
+      # ----------------------------------------------------------
+      # 9. configure 失败时收集 config.log 用于排查
+      # ----------------------------------------------------------
+      - name: Collect config.log on failure
+        if: failure()
+        run: |
+          mkdir -p config-logs
+          # termux build dir 在 docker 容器内的 /home/builder/.termux-build/
+          docker run --rm \
+            -v "$(pwd):/home/builder/termux-packages" \
+            termux/package-builder:latest \
+            bash -c 'find /home/builder/.termux-build/postgresql -name "config.log" -exec cp {} /home/builder/termux-packages/config-logs/ \; 2>/dev/null || true'
+          ls -la config-logs/ || echo "No config.log found"
+
+      - name: Upload config.log on failure
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: postgresql-debs
-          path: ./output/*.deb
+          name: config-log-aarch64
+          path: config-logs/
+          if-no-files-found: ignore
+
+      # ----------------------------------------------------------
+      # 10. 验证 postgresql deb 产出 + Depends 字段检查
+      # ----------------------------------------------------------
+      - name: Verify postgresql deb
+        run: |
+          echo "=== postgresql debs ==="
+          ls -lh output/postgresql_*_${{ env.TARGET_ARCH }}.deb
+
+          echo ""
+          echo "=== postgresql package control info ==="
+          cd /tmp && rm -rf verify-pg && mkdir verify-pg && cd verify-pg
+          ar x $GITHUB_WORKSPACE/output/postgresql_*_${{ env.TARGET_ARCH }}.deb
+          tar -xJf control.tar.xz ./control
+          cat control
+
+          # 期望 Depends 只含 3 个 libandroid-*（8 个核心库已静态链接）
+          if grep -E "Depends.*(openssl|readline|libicu|zlib|libuuid|libxml2|ncurses|libiconv)" control; then
+            echo "⚠️ 警告：Depends 中出现了应该静态链接的库"
+          else
+            echo "✅ Depends 字段干净，所有核心库已静态链接"
+          fi
+
+      # ----------------------------------------------------------
+      # 11. 上传 postgresql .deb（手机端只需要装这个）
+      # ----------------------------------------------------------
+      - name: Upload postgresql deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgresql_aarch64
+          path: |
+            output/postgresql_*_${{ env.TARGET_ARCH }}.deb
+            output/postgresql-*_all.deb
+          if-no-files-found: error
+          retention-days: 30
+
+      # ----------------------------------------------------------
+      # 12. 上传 libxml2-static .deb（仅复用构建 / debug 用，
+      #     手机端安装 postgresql 时不需要装这个 —— libxml2.a
+      #     的代码已静态链接进 postgresql 二进制）
+      # ----------------------------------------------------------
+      - name: Upload libxml2-static deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: libxml2-static_aarch64
+          path: output/libxml2-static_*_${{ env.TARGET_ARCH }}.deb
           if-no-files-found: warn
+          retention-days: 30
+
+      # ----------------------------------------------------------
+      # 13. 保存 docker 镜像缓存（加速下次构建）
+      # ----------------------------------------------------------
+      - name: Save docker image to cache
+        if: always()
+        run: |
+          mkdir -p /tmp/docker-image
+          if [ ! -f /tmp/docker-image/termux-builder.tar ]; then
+            docker save termux/package-builder:latest -o /tmp/docker-image/termux-builder.tar 2>/dev/null || true
+          fi
