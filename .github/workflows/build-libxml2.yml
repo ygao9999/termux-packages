@@ -1,4 +1,4 @@
-name: "Build libxml2 (with static subpackage)"
+name: "Build libxml2 (with static .a)"
 
 on:
   workflow_dispatch: {}
@@ -23,6 +23,23 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
           df -h
 
+      # LOCAL PATCH: cache ~/.termux-build across runs. This directory holds
+      # the toolchain cache (_cache/) and host-build products (e.g. the
+      # python3.14 crossenv build that libxml2 depends on for host tooling).
+      # Without this, every single CI run recompiles that host python from
+      # scratch, which is where the ~15000 lines of log and most of the
+      # build time came from. Cache key is scoped to the package name and
+      # a hash of its build.sh, so it invalidates automatically whenever
+      # the recipe actually changes, and a "restore-keys" fallback lets a
+      # slightly-stale cache still be reused as a warm starting point.
+      - name: Cache termux-build host/toolchain artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.termux-build
+          key: termux-build-libxml2-${{ runner.os }}-${{ hashFiles('packages/libxml2/build.sh') }}
+          restore-keys: |
+            termux-build-libxml2-${{ runner.os }}-
+
       - name: Run termux-packages docker build for libxml2
         shell: bash
         run: |
@@ -36,19 +53,26 @@ jobs:
           find . -maxdepth 2 -iname "*.deb" -print
           find . -maxdepth 2 -iname "*.deb" -exec sha256sum {} \;
 
-      - name: Inspect libxml2-static contents
+      # LOCAL PATCH: don't assume the .a landed in a separate -static
+      # package (it currently doesn't, since we removed the hand-written
+      # libxml2-static.subpackage.sh that caused the "Duplicated package"
+      # error). Instead scan every produced .deb for lib/libxml2.a and
+      # report whichever one actually has it.
+      - name: Confirm libxml2.a made it into a produced .deb
         shell: bash
         run: |
           set -euxo pipefail
-          DEB=$(find . -maxdepth 2 -iname "libxml2-static_*.deb" | head -1)
-          if [ -z "$DEB" ]; then
-            echo "ERROR: no libxml2-static_*.deb produced" >&2
+          FOUND=""
+          for deb in $(find . -maxdepth 2 -iname "*.deb"); do
+            if dpkg-deb -c "$deb" | grep -q "lib/libxml2\.a$"; then
+              echo "libxml2.a found in: $deb"
+              FOUND="$deb"
+            fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "ERROR: lib/libxml2.a was not found in any produced .deb" >&2
             exit 1
           fi
-          echo "Found: $DEB"
-          dpkg-deb -c "$DEB"
-          echo "--- confirming libxml2.a is present ---"
-          dpkg-deb -c "$DEB" | grep -q "lib/libxml2.a" && echo "OK: libxml2.a present" || (echo "MISSING libxml2.a" >&2; exit 1)
 
       - name: Upload built .deb files
         if: always()
