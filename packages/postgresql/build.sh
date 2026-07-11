@@ -1,3 +1,40 @@
+# ============================================================
+# postgresql build.sh  (termux-packages framework, 18.2 baseline)
+#
+# ⚠️ 构建前置：libxml2-static 是手动 build 的（官方仓库没有这个包）
+#   在跑本脚本前必须先手动安装上传的 deb：
+#     dpkg -i libxml2-static_2.15.3-2_aarch64.deb
+#   验证 libxml2.a 在位：
+#     ls $TERMUX_PREFIX/lib/libxml2.a
+#     nm $TERMUX_PREFIX/lib/libxml2.a | grep 'U libiconv'
+#     （应看到 U libiconv / libiconv_open / libiconv_close）
+#   这三个 U 符号由 libiconv-static（官方包）提供，所以 BUILD_DEPENDS
+#   里也加了 libiconv-static。
+#
+# 4 条核心改动：
+#   1. TERMUX_PKG_BUILD_DEPENDS  → 8 个 -static 子包
+#      （openssl / readline / icu / zlib / uuid / xml2 / ncurses / iconv，
+#       构建期需要，最终静态链接进二进制，运行时不依赖 .so）
+#   2. --with-uuid=e2fs  →  --with-uuid=ossp
+#      对齐 ossp-uuid-static（ossp 装的是 <uuid.h>，
+#      e2fsprogs 的 libuuid 装的是 <uuid/uuid.h>，header 路径不同）
+#   3. termux_step_pre_configure 里加 LIBS 做部分静态链接
+#      -Wl,-Bstatic ... -Wl,-Bdynamic，放 LIBS 不放 LDFLAGS
+#      （重演之前 LDFLAGS 位置错误导致探测失败的坑）
+#   4. 旧版手工 find .a / wget 的 termux_step_post_configure 已删
+#      （官方 18.2 baseline 本来就没有，无需再处理）
+#
+# 保留官方 18.2 的全部 Android-only 关键配置：
+#   - USE_UNNAMED_POSIX_SEMAPHORES=1   (Android 无 SysV 信号量)
+#   - ZIC=hostbuilt zic                (Android 6.0+ 不支持 hard link)
+#   - pgac_cv_prog_cc_LDFLAGS_EX_BE__Wl___export_dynamic=yes
+#     (PG16+ initdb "cannot locate symbol" 修复)
+#   - pgac_cv_prog_cc_LDFLAGS__Wl___as_needed=yes
+#   - on-device build check
+#   - contrib 模块批量编译（17 个，含 uuid-ossp）
+#   - postgres service script
+# ============================================================
+
 TERMUX_PKG_HOMEPAGE=https://www.postgresql.org
 TERMUX_PKG_DESCRIPTION="Object-relational SQL database"
 TERMUX_PKG_LICENSE="PostgreSQL"
@@ -6,82 +43,126 @@ TERMUX_PKG_MAINTAINER="@termux"
 TERMUX_PKG_VERSION="18.2"
 TERMUX_PKG_SRCURL=https://ftp.postgresql.org/pub/source/v$TERMUX_PKG_VERSION/postgresql-$TERMUX_PKG_VERSION.tar.bz2
 TERMUX_PKG_SHA256=5245bd1b79700d55b8e0575be0325ef61e7bbef627e6a616e4cf36ad4687be36
-TERMUX_PKG_DEPENDS="libandroid-execinfo, libandroid-shmem, libicu, libuuid, libxml2, openssl, readline, zlib"
+
+# ============================================================
+# 依赖划分策略：
+#   8 个核心库 → 全部静态链接进二进制（构建期用 -static 子包的 .a）
+#   其它库     → 动态依赖，用户 pkg install postgresql 时自动拉
+#
+# 验证依据（实测 .deb 解包）：
+#   readline-static (8.3.3) 只含 libreadline.a + libhistory.a；
+#     libreadline.a 里有 U tgetent/tgetstr/tputs 等 undefined 符号。
+#   ncurses-static (6.6.20260307+really6.5.20250830) 含 libncursesw.a
+#     (771KB / 169 个 .o)，并附带 libtinfo.a 作为 symlink → libncursesw.a。
+#     → 必须把 ncurses-static 加进静态段才能完全消除 tgetent 等 U 符号。
+#   libxml2-static (2.15.3-2，手动 build) 含 libxml2.a (7.6MB)，
+#     有 U libiconv/libiconv_open/libiconv_close 三个 undefined 符号。
+#   libiconv-static (1.18-1) 含 libiconv.a (1.16MB)，T libiconv/open/close。
+#     → 必须把 libiconv-static 加进静态段才能完全消除 libxml2 的 U 符号。
+# ============================================================
+
+# 构建期依赖：8 个静态库子包 + 编译工具
+# -static 包只提供 .a，不提供 .so，所以放 BUILD_DEPENDS
+# 不进最终 deb 的 Depends
+TERMUX_PKG_BUILD_DEPENDS="openssl-static, readline-static, libicu-static, zlib-static, ossp-uuid-static, libxml2-static, ncurses-static, libiconv-static, flex, bison, perl"
+
+# 运行期动态依赖（用户 pkg install 时会被 termux 自动拉取）：
+#   libandroid-execinfo  → backtrace() 系列（Android libc 缺失）
+#   libandroid-shmem     → shm_open/shm_unlink（PG 共享内存需要）
+#   libandroid-pos-sem   → POSIX 信号量（USE_UNNAMED_POSIX_SEMAPHORES=1
+#                          用的是 unnamed sem，但仍可能需要 sem_open
+#                          等 named sem；如该包不存在可删）
+# 注意：ncurses 已从运行期依赖中移除，因为 libncursesw.a 已静态链接进二进制
+TERMUX_PKG_DEPENDS="libandroid-execinfo, libandroid-shmem, libandroid-pos-sem"
+
+# ----- configure args -----
+# 改动 #2: --with-uuid=ossp 替代 --with-uuid=e2fs
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 --with-icu
 --with-libxml
 --with-openssl
---with-uuid=e2fs
+--with-uuid=ossp
 USE_UNNAMED_POSIX_SEMAPHORES=1
 ZIC=${TERMUX_PKG_HOSTBUILD_DIR}/src/timezone/zic
 pgac_cv_prog_cc_LDFLAGS_EX_BE__Wl___export_dynamic=yes
 pgac_cv_prog_cc_LDFLAGS__Wl___as_needed=yes
 "
+
 TERMUX_PKG_RM_AFTER_INSTALL="
 bin/ecpg
 lib/libecpg*
 share/man/man1/ecpg.1
 "
+
 TERMUX_PKG_HOSTBUILD=true
+
 TERMUX_PKG_BREAKS="postgresql-contrib (<= 10.3-1), postgresql-dev"
 TERMUX_PKG_REPLACES="postgresql-contrib (<= 10.3-1), postgresql-dev"
+
 TERMUX_PKG_SERVICE_SCRIPT=("postgres" "mkdir -p ~/.postgres\nif [ -f \"~/.postgres/postgresql.conf\" ]; then DATADIR=\"~/.postgres\"; else DATADIR=\"$TERMUX_PREFIX/var/lib/postgresql\"; fi\nexec postgres -D \$DATADIR 2>&1")
 
+# ------------------------------------------------------------
+# host build：官方做法是 configure + make -j 全树，
+# 真正目的是拿到 patched 的 zic（用 symlink 替代 hard link）。
+# ------------------------------------------------------------
 termux_step_host_build() {
-    # 构建本机 zic 工具（使用符号链接代替硬链接）
+    # Build a native zic binary which we have patched to
+    # use symlinks instead of hard links.
     $TERMUX_PKG_SRCDIR/configure --without-readline
     make -j "${TERMUX_PKG_MAKE_PROCESSES}"
 }
 
+# ------------------------------------------------------------
+# pre_configure：改动 #3 在这里加 LIBS，保留官方的 on-device 检查。
+# ------------------------------------------------------------
 termux_step_pre_configure() {
+    # 官方的 on-device 安全检查（删 TERMUX_PREFIX 里的文件会出问题）
     if $TERMUX_ON_DEVICE_BUILD; then
         termux_error_exit "Package '$TERMUX_PKG_NAME' is not safe for on-device builds."
     fi
+
+    # 部分静态链接：8 个 .a 全部 -Bstatic，
+    # 之后立刻 -Bdynamic 切回，让系统库走动态
+    #
+    # 依赖方向（左依赖右，被依赖者放右边）：
+    #   ssl       → crypto
+    #   readline  → history → tinfo
+    #   icui18n   → icuuc → icudata
+    #   z
+    #   uuid      (ossp, 独立)
+    #   xml2      → iconv（libxml2.a 有 U libiconv*）
+    #   tinfo     (= libncursesw.a，提供 tgetent/tgetstr/tputs)
+    #
+    # 动态段：
+    #   -ldl -lpthread -lm  : openssl/icu 等系统库
+    #   (ncurses/iconv 已静态进二进制，运行时不再需要 .so)
+    #
+    # 为什么放 LIBS 而不是 LDFLAGS：
+    #   configure 的 feature 探测走 AC_CHECK_LIB 等宏，会直接把
+    #   $LIBS 拼到测试链接命令里。LDFLAGS 放 -lssl 时 gcc 会把
+    #   "-lssl" 当 ld 选项解析，找不到对应 .so 就 silently skip，
+    #   导致 HAVE_LIBSSL 探测失败 → 编译出来的 postgresql 没加密。
+    export LIBS="-Wl,-Bstatic \
+        -lssl -lcrypto \
+        -lreadline -lhistory -ltinfo \
+        -licui18n -licuuc -licudata \
+        -lz \
+        -luuid \
+        -lxml2 -liconv \
+        -Wl,-Bdynamic \
+        -ldl -lpthread -lm \
+        $LIBS"
 }
 
-# 定义静态链接所需的库（使用 -l: 强制指定静态库文件名，避免依赖 -Bstatic）
-# 同时保留 -L 指定路径，确保链接器能找到这些 .a 文件
-STATIC_LIBRARIES="-L$TERMUX_PREFIX/lib -l:libssl.a -l:libcrypto.a -l:libicuuc.a -l:libicui18n.a -l:libicudata.a -l:libxml2.a -l:libreadline.a -l:libuuid.a -l:libz.a"
-
-termux_step_post_configure() {
-    # 查找并收集静态库的绝对路径
-    local STATIC_LIBS=""
-    for libname in ssl crypto icuuc icui18n icudata xml2 readline uuid z; do
-        local libfile=$(find $TERMUX_PREFIX -name "lib${libname}.a" -print -quit 2>/dev/null)
-        if [ -z "$libfile" ]; then
-            echo "Error: Static library lib${libname}.a not found under $TERMUX_PREFIX"
-            exit 1
-        fi
-        STATIC_LIBS="$STATIC_LIBS $libfile"
-    done
-
-    export LDFLAGS="$LDFLAGS $STATIC_LIBS"
-    export LIBS="$STATIC_LIBS"
-
-    # 复用主机 zic
-    if [ -f "${TERMUX_PKG_HOSTBUILD_DIR}/src/timezone/zic" ]; then
-        mkdir -p "${TERMUX_PKG_BUILDDIR}/src/timezone"
-        cp -f "${TERMUX_PKG_HOSTBUILD_DIR}/src/timezone/zic" "${TERMUX_PKG_BUILDDIR}/src/timezone/zic"
-        touch "${TERMUX_PKG_BUILDDIR}/src/timezone/zic"
-    else
-        echo "Warning: Host zic not found"
-    fi
-}
-
-termux_step_make() {
-    # 显式传递 LDFLAGS 和 LIBS，确保静态库被正确链接
-    make -j ${TERMUX_PKG_MAKE_PROCESSES} LDFLAGS="$LDFLAGS" LIBS="$LIBS"
-}
-
-termux_step_make_install() {
-    make -j ${TERMUX_PKG_MAKE_PROCESSES} install LDFLAGS="$LDFLAGS" LIBS="$LIBS"
-}
-
+# ------------------------------------------------------------
+# post_make_install：保留官方逻辑
+#   1. 装 man 页
+#   2. 批量编译 17 个 contrib 模块（含 uuid-ossp，因为 --with-uuid=ossp）
+# ------------------------------------------------------------
 termux_step_post_make_install() {
-    # 安装手册页
+    # Man pages are not installed by default:
     make -C doc/src/sgml install-man
 
-    # 编译并安装 contrib 扩展，同样传递 LDFLAGS 和 LIBS
     for contrib in \
         btree_gin \
         btree_gist \
@@ -100,6 +181,6 @@ termux_step_post_make_install() {
         unaccent \
         uuid-ossp \
         ; do
-        (make -C contrib/${contrib} -s -j ${TERMUX_PKG_MAKE_PROCESSES} install LDFLAGS="$LDFLAGS" LIBS="$LIBS")
+        (make -C contrib/${contrib} -s -j ${TERMUX_PKG_MAKE_PROCESSES} install)
     done
 }
