@@ -40,6 +40,57 @@ jobs:
           set -euxo pipefail
           find ./output -iname "*.deb" -print
 
+      # CONFIRMED (not a guess): -i/-I only applies to TERMUX_PKG_DEPENDS
+      # (runtime deps). flex is one of postgresql's TERMUX_PKG_BUILD_DEPENDS
+      # (build-time only), and those are always compiled locally regardless
+      # of -i/-I -- this was verified by removing a standalone "build flex"
+      # step and observing flex still got compiled from source as part of
+      # postgresql's own build. So this patch is necessary, not optional.
+      #
+      # flex fails to compile in this environment: its bundled gnulib
+      # malloc.c compatibility shim declares `void *malloc();` (old K&R
+      # style, no prototype) which conflicts with the compiler's builtin
+      # malloc() declaration on newer gcc/clang, turning what used to be a
+      # warning into a hard error ("too many arguments to function malloc").
+      # This is a known upstream/gnulib issue unrelated to our postgresql
+      # changes. It happens during flex's *host* build stage
+      # (TERMUX_PKG_HOSTBUILD=true; visible as `stage1flex-malloc.o` in the
+      # log), which is compiled with plain `gcc`, not the aarch64 cross
+      # compiler, and is configured via $TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS
+      # rather than the target-stage termux_step_pre_configure hook.
+      #
+      # flex's build.sh invokes configure with an *unquoted* expansion of
+      # that variable, so bash word-splits it on whitespace into separate
+      # configure arguments. A single whitespace-free "CFLAGS=..." token is
+      # treated as one VAR=value assignment; anything with an embedded
+      # space splits into extra tokens that configure doesn't recognize as
+      # flags of its own and rejects with "unrecognized option" (verified
+      # locally against a real autoconf-generated configure script before
+      # settling on this fix). We therefore replace the existing
+      # CFLAGS=-D_GNU_SOURCE=1 (an old Ubuntu 17.10-specific workaround,
+      # irrelevant on the ubuntu-24.04 runner used here) with our own single
+      # flag rather than trying to append to it.
+      - name: Patch flex build.sh to work around gnulib malloc.c compile error (host build stage)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          FLEX_BUILD_SH="packages/flex/build.sh"
+          if [ ! -f "$FLEX_BUILD_SH" ]; then
+            echo "ERROR: $FLEX_BUILD_SH not found" >&2
+            exit 1
+          fi
+          echo "=== Before patch ==="
+          grep -n "TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS" "$FLEX_BUILD_SH"
+          sed -i \
+            's/TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS="CFLAGS=-D_GNU_SOURCE=1"/TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS="CFLAGS=-Wno-error=builtin-declaration-mismatch"/' \
+            "$FLEX_BUILD_SH"
+          echo "=== After patch ==="
+          grep -n "TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS" "$FLEX_BUILD_SH"
+          if ! grep -q "builtin-declaration-mismatch" "$FLEX_BUILD_SH"; then
+            echo "ERROR: sed did not find the expected line to patch. flex/build.sh may have changed upstream." >&2
+            exit 1
+          fi
+
       - name: Build postgresql (partial static link against 8 static libs)
         shell: bash
         run: |
