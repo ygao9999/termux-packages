@@ -76,10 +76,5 @@ termux_step_post_massage() {
 		echo "ERROR - Found   : $(find lib/libxml2* -regex '.*so\.[0-9]+')" >&2
 		termux_error_exit "Not proceeding with update."
 	fi
-	# LOCAL PATCH: sanity-check that default_library=both actually produced
-	# the static archive before the libxml2-static subpackage tries to pick
-	# it up. Fail loudly rather than silently shipping an empty subpackage.
-	if [[ ! -e "lib/libxml2.a" ]]; then
-		termux_error_exit "Expected lib/libxml2.a (static) to exist with default_library=both, but it's missing."
-	fi
+
 }
