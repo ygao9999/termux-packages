@@ -1,0 +1,61 @@
+name: "Build libxml2 (with static subpackage)"
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - "**"
+    paths:
+      - "packages/libxml2/**"
+      - ".github/workflows/build-libxml2.yml"
+
+jobs:
+  build-libxml2:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free up disk space
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          df -h
+
+      - name: Run termux-packages docker build for libxml2
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ./scripts/run-docker.sh -d ./build-package.sh -I -C -a aarch64 libxml2
+
+      - name: List produced .deb files
+        shell: bash
+        run: |
+          set -euxo pipefail
+          find . -maxdepth 2 -iname "*.deb" -print
+          find . -maxdepth 2 -iname "*.deb" -exec sha256sum {} \;
+
+      - name: Inspect libxml2-static contents
+        shell: bash
+        run: |
+          set -euxo pipefail
+          DEB=$(find . -maxdepth 2 -iname "libxml2-static_*.deb" | head -1)
+          if [ -z "$DEB" ]; then
+            echo "ERROR: no libxml2-static_*.deb produced" >&2
+            exit 1
+          fi
+          echo "Found: $DEB"
+          dpkg-deb -c "$DEB"
+          echo "--- confirming libxml2.a is present ---"
+          dpkg-deb -c "$DEB" | grep -q "lib/libxml2.a" && echo "OK: libxml2.a present" || (echo "MISSING libxml2.a" >&2; exit 1)
+
+      - name: Upload built .deb files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: libxml2-debs
+          path: |
+            ./*.deb
+            ./debs/*.deb
+          if-no-files-found: warn
