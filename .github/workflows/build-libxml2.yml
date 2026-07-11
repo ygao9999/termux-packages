@@ -50,20 +50,18 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          find . -maxdepth 2 -iname "*.deb" -print
-          find . -maxdepth 2 -iname "*.deb" -exec sha256sum {} \;
+          find ./output -iname "*.deb" -print
+          find ./output -iname "*.deb" -exec sha256sum {} \;
 
       # LOCAL PATCH: don't assume the .a landed in a separate -static
-      # package (it currently doesn't, since we removed the hand-written
-      # libxml2-static.subpackage.sh that caused the "Duplicated package"
-      # error). Instead scan every produced .deb for lib/libxml2.a and
+      # package by name. Scan every produced .deb for lib/libxml2.a and
       # report whichever one actually has it.
       - name: Confirm libxml2.a made it into a produced .deb
         shell: bash
         run: |
           set -euxo pipefail
           FOUND=""
-          for deb in $(find . -maxdepth 2 -iname "*.deb"); do
+          for deb in $(find ./output -iname "*.deb"); do
             if dpkg-deb -c "$deb" | grep -q "lib/libxml2\.a$"; then
               echo "libxml2.a found in: $deb"
               FOUND="$deb"
@@ -79,7 +77,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: libxml2-debs
-          path: |
-            ./*.deb
-            ./debs/*.deb
+          path: ./output/*.deb
           if-no-files-found: warn
