@@ -40,6 +40,49 @@ jobs:
           set -euxo pipefail
           find ./output -iname "*.deb" -print
 
+      # flex fails to compile in this environment: its bundled gnulib
+      # malloc.c compatibility shim declares `void *malloc();` (old K&R
+      # style, no prototype) which conflicts with the compiler's builtin
+      # malloc() declaration on newer gcc/clang, turning what used to be a
+      # warning into a hard error ("too many arguments to function malloc").
+      # This is a known upstream/gnulib issue unrelated to our postgresql
+      # changes. Rather than relying on an environment variable making it
+      # through the docker invocation (unreliable, since termux-packages'
+      # build scripts often reset CFLAGS for cross-compile consistency),
+      # we patch flex's own build.sh to inject the relaxed flag in
+      # termux_step_pre_configure, the same pattern official packages like
+      # emacs/sc-im use for one-off compiler quirks.
+      - name: Patch flex build.sh to work around gnulib malloc.c compile error
+        shell: bash
+        run: |
+          set -euxo pipefail
+          FLEX_BUILD_SH="packages/flex/build.sh"
+          if [ ! -f "$FLEX_BUILD_SH" ]; then
+            echo "ERROR: $FLEX_BUILD_SH not found" >&2
+            exit 1
+          fi
+          {
+            echo ""
+            echo "# LOCAL PATCH: work around a gnulib malloc.c compile error on newer"
+            echo "# gcc/clang, where the K&R-style declaration of malloc() in flex's"
+            echo "# bundled compatibility shim conflicts with the compiler's builtin"
+            echo "# prototype for malloc(), turning a warning into a hard error"
+            echo "# (too many arguments to function malloc). Downgrade that one"
+            echo "# diagnostic back to a warning; this doesn't touch any of flex's"
+            echo "# own logic, only a vendored compatibility file."
+            echo "termux_step_pre_configure() {"
+            echo '	CFLAGS+=" -Wno-error=builtin-declaration-mismatch"'
+            echo "}"
+          } >> "$FLEX_BUILD_SH"
+          echo "=== Patched flex/build.sh tail ==="
+          tail -15 "$FLEX_BUILD_SH"
+
+      - name: Build flex (with the compat-warning patch applied above)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ./scripts/run-docker.sh -d ./build-package.sh -I -C -a aarch64 flex
+
       - name: Build postgresql (partial static link against 8 static libs)
         shell: bash
         run: |

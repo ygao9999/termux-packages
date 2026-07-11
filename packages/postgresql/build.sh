@@ -62,9 +62,19 @@ TERMUX_PKG_SHA256=5245bd1b79700d55b8e0575be0325ef61e7bbef627e6a616e4cf36ad4687be
 # ============================================================
 
 # 构建期依赖：8 个静态库子包 + 编译工具
-# -static 包只提供 .a，不提供 .so，所以放 BUILD_DEPENDS
-# 不进最终 deb 的 Depends
+#
+# 重要：termux-packages 的 -i/-I 参数只对 TERMUX_PKG_DEPENDS（运行期依赖）
+# 生效，不覆盖 TERMUX_PKG_BUILD_DEPENDS（构建期依赖）——后者即使官方仓库
+# 已有预编译 .deb，也会被 build-package.sh 强制走本地源码编译一次。
+#
+# flex 在这个环境（较新版本 gcc/clang）下源码编译会在 gnulib 的 malloc.c
+# 兼容层报错（"too many arguments to function malloc"）。这是 flex 自带
+# gnulib 代码与新编译器内建函数原型不匹配导致的已知问题，与本项目改动
+# 无关，见 CI workflow 里对应的处理步骤（提前在 output/ 放一份能通过
+# 编译的 flex .deb，或直接给 flex 单独跑一次带兼容 CFLAGS 的构建）。
 TERMUX_PKG_BUILD_DEPENDS="openssl-static, readline-static, libicu-static, zlib-static, ossp-uuid-static, libxml2-static, ncurses-static, libiconv-static, flex, bison, perl"
+
+
 
 # 运行期动态依赖（用户 pkg install 时会被 termux 自动拉取）：
 #   libandroid-execinfo        → backtrace() 系列（Android libc 缺失）
