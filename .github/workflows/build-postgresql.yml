@@ -40,51 +40,6 @@ jobs:
           set -euxo pipefail
           find ./output -iname "*.deb" -print
 
-      # flex fails to compile in this environment: its bundled gnulib
-      # malloc.c compatibility shim declares `void *malloc();` (old K&R
-      # style, no prototype) which conflicts with the compiler's builtin
-      # malloc() declaration on newer gcc/clang, turning what used to be a
-      # warning into a hard error ("too many arguments to function malloc").
-      # This is a known upstream/gnulib issue unrelated to our postgresql
-      # changes.
-      #
-      # IMPORTANT: the failure happens during flex's *host* build stage
-      # (TERMUX_PKG_HOSTBUILD=true; it builds a native x86_64 flex first,
-      # used to generate lexer code, compiled with plain `gcc` -- visible
-      # in the error log as `stage1flex-malloc.o`). A termux_step_pre_configure
-      # hook only affects the target (aarch64) build stage, so it does NOT
-      # apply here. The correct mechanism is $TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS,
-      # which flex's own build.sh already uses for a similar purpose
-      # (it already sets CFLAGS=-D_GNU_SOURCE=1 there for an unrelated
-      # Ubuntu 17.10 issue). We append our flag onto that same line so both
-      # fixes apply together, rather than overwriting the existing one.
-      - name: Patch flex build.sh to work around gnulib malloc.c compile error (host build stage)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          FLEX_BUILD_SH="packages/flex/build.sh"
-          if [ ! -f "$FLEX_BUILD_SH" ]; then
-            echo "ERROR: $FLEX_BUILD_SH not found" >&2
-            exit 1
-          fi
-          echo "=== Before patch ==="
-          grep -n "TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS" "$FLEX_BUILD_SH"
-          sed -i \
-            's/TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS="CFLAGS=-D_GNU_SOURCE=1"/TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS="CFLAGS=-D_GNU_SOURCE=1 -Wno-error=builtin-declaration-mismatch"/' \
-            "$FLEX_BUILD_SH"
-          echo "=== After patch ==="
-          grep -n "TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS" "$FLEX_BUILD_SH"
-          if ! grep -q "builtin-declaration-mismatch" "$FLEX_BUILD_SH"; then
-            echo "ERROR: sed did not find the expected line to patch. flex/build.sh may have changed upstream." >&2
-            exit 1
-          fi
-
-      - name: Build flex (with the compat-warning patch applied above)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          ./scripts/run-docker.sh -d ./build-package.sh -I -C -a aarch64 flex
-
       - name: Build postgresql (partial static link against 8 static libs)
         shell: bash
         run: |
