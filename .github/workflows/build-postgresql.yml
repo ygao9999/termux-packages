@@ -3,30 +3,27 @@
 #
 # 仓库前提：
 #   - 本仓库是 termux/termux-packages 的 fork
-#   - packages/postgresql/build.sh 已修改为静态链接版本
-#   - packages/libxml2/build.sh 已启用 -static 子包
-#     （如未修改，本 workflow 会自动用 sed 临时改）
+#   - packages/postgresql/build.sh 已改为静态链接版本
+#   - packages/libxml2/build.sh 已启用 -static 子包（已 commit）
 #   - 本文件放在 .github/workflows/build-postgresql.yml
 #
 # 编译平台：
 #   termux 官方编译平台（termux/package-builder Docker 镜像）
 #   通过 scripts/run-docker.sh 启动，跟 termux 官方 CI 完全一致
 #
-# 流程（10 步）：
+# 流程（8 步）：
 #   1. checkout fork 仓库
-#   2. 确保 libxml2/build.sh 启用了 -static 子包（幂等 sed）
-#   3. setup docker（run-docker.sh 依赖）
-#   4. 缓存 ccache + docker 镜像（加速二次构建）
-#   5. build libxml2 → 产出 libxml2-static_*.deb 到 output/
-#   6. 验证 libxml2-static deb 含 libxml2.a
-#   7. build postgresql → 自动从 output/ 拉 libxml2-static
-#   8. 失败时收集 config.log 用于排查
-#   9. 验证 postgresql deb 产出 + Depends 字段检查
-#  10. 上传 postgresql deb + libxml2-static deb 作为 artifact
+#   2. setup docker（run-docker.sh 依赖）
+#   3. 缓存 ccache + docker 镜像（加速二次构建）
+#   4. build libxml2 → 产出 libxml2-static_*.deb 到 output/
+#   5. 验证 libxml2-static deb 含 libxml2.a
+#   6. build postgresql → 自动从 output/ 拉取 libxml2-static
+#   7. 失败时收集 config.log 用于排查
+#   8. 验证 + 上传 postgresql deb 作为 artifact
 #
 # 触发方式：
 #   - 手动 dispatch（支持版本号覆盖）
-#   - push 到 main/master 且 packages/postgresql/ 有改动
+#   - push 到 main/master 且 packages/postgresql/ 或 libxml2/ 有改动
 #   - PR 触发
 #   - 每周日凌晨 3 点定时
 # ============================================================
@@ -95,40 +92,18 @@ jobs:
           echo "=== packages/postgresql/build.sh head ==="
           head -20 packages/postgresql/build.sh
 
-      # ----------------------------------------------------------
-      # 3. 确保 libxml2/build.sh 启用了 -static 子包
-      #    幂等操作：已改过则跳过，未改过则临时改（不提交）
-      #    （官方默认 TERMUX_PKG_NO_STATICSPLIT=true，需要改成 false）
-      # ----------------------------------------------------------
-      - name: Ensure libxml2-static subpackage enabled
-        run: |
-          cd packages/libxml2
-          echo "=== Before ==="
-          grep -E "NO_STATICSPLIT|TERMUX_PKG_VERSION" build.sh || true
-
-          if grep -q "TERMUX_PKG_NO_STATICSPLIT=false" build.sh; then
-            echo "✅ libxml2/build.sh 已启用 -static 子包，跳过"
-          else
-            # 删掉旧的 NO_STATICSPLIT 行（不论值）
-            sed -i '/TERMUX_PKG_NO_STATICSPLIT/d' build.sh
-            # 显式声明启用静态子包
-            echo "" >> build.sh
-            echo "# 启用静态库子包（postgresql 静态链接需要）" >> build.sh
-            echo "TERMUX_PKG_NO_STATICSPLIT=false" >> build.sh
-            echo "ℹ️ 已临时启用 -static 子包（不提交到仓库）"
-          fi
-
-          echo "=== After ==="
-          grep -E "NO_STATICSPLIT|TERMUX_PKG_VERSION" build.sh || true
+          echo ""
+          echo "=== packages/libxml2/build.sh (static check) ==="
+          grep -E "NO_STATICSPLIT|TERMUX_PKG_VERSION" packages/libxml2/build.sh || true
 
       # ----------------------------------------------------------
-      # 4. Setup Docker（termux run-docker.sh 依赖）
+      # 3. Setup Docker（termux run-docker.sh 依赖）
       # ----------------------------------------------------------
       - name: Set up Docker
         uses: docker/setup-docker-action@v4
 
       # ----------------------------------------------------------
-      # 5. 缓存：ccache + termux docker 镜像（加速二次构建）
+      # 4. 缓存：ccache + termux docker 镜像（加速二次构建）
       # ----------------------------------------------------------
       - name: ccache cache
         uses: actions/cache@v4
@@ -155,7 +130,7 @@ jobs:
           fi
 
       # ----------------------------------------------------------
-      # 6. Build libxml2（产出 libxml2 + libxml2-static deb 到 output/）
+      # 5. Build libxml2（产出 libxml2 + libxml2-static deb 到 output/）
       #    使用 termux 官方编译平台：./scripts/run-docker.sh
       # ----------------------------------------------------------
       - name: Build libxml2 (creates libxml2-static subpackage)
@@ -169,13 +144,13 @@ jobs:
           ls -lh output/libxml2*_${{ env.TARGET_ARCH }}.deb
 
       # ----------------------------------------------------------
-      # 7. 验证 libxml2-static deb 确实产出且含 libxml2.a
+      # 6. 验证 libxml2-static deb 确实产出且含 libxml2.a
       # ----------------------------------------------------------
       - name: Verify libxml2-static deb
         run: |
           if ! ls output/libxml2-static_*_${{ env.TARGET_ARCH }}.deb 2>/dev/null; then
             echo "❌ libxml2-static_*.deb 未生成"
-            echo "请检查 packages/libxml2/build.sh 是否启用了 NO_STATICSPLIT=false"
+            echo "请检查 packages/libxml2/build.sh 是否含 TERMUX_PKG_NO_STATICSPLIT=false"
             exit 1
           fi
 
@@ -191,14 +166,14 @@ jobs:
           echo "✅ libxml2.a found in static subpackage"
 
       # ----------------------------------------------------------
-      # 8. Build postgresql（自动从 output/ 拉取 libxml2-static）
+      # 7. Build postgresql（自动从 output/ 拉取 libxml2-static）
       # ----------------------------------------------------------
       - name: Build postgresql
         run: |
           ./scripts/run-docker.sh ./build-package.sh -i -f -a ${{ env.TARGET_ARCH }} postgresql
 
       # ----------------------------------------------------------
-      # 9. configure 失败时收集 config.log 用于排查
+      # 8. configure 失败时收集 config.log 用于排查
       # ----------------------------------------------------------
       - name: Collect config.log on failure
         if: failure()
@@ -220,7 +195,7 @@ jobs:
           if-no-files-found: ignore
 
       # ----------------------------------------------------------
-      # 10. 验证 postgresql deb 产出 + Depends 字段检查
+      # 9. 验证 postgresql deb 产出 + Depends 字段检查
       # ----------------------------------------------------------
       - name: Verify postgresql deb
         run: |
@@ -242,7 +217,7 @@ jobs:
           fi
 
       # ----------------------------------------------------------
-      # 11. 上传 postgresql .deb（手机端只需要装这个）
+      # 10. 上传 postgresql .deb（手机端只需要装这个）
       # ----------------------------------------------------------
       - name: Upload postgresql deb
         uses: actions/upload-artifact@v4
@@ -255,25 +230,5 @@ jobs:
           retention-days: 30
 
       # ----------------------------------------------------------
-      # 12. 上传 libxml2-static .deb（仅复用构建 / debug 用，
+      # 11. 上传 libxml2-static .deb（仅复用构建 / debug 用，
       #     手机端安装 postgresql 时不需要装这个 —— libxml2.a
-      #     的代码已静态链接进 postgresql 二进制）
-      # ----------------------------------------------------------
-      - name: Upload libxml2-static deb
-        uses: actions/upload-artifact@v4
-        with:
-          name: libxml2-static_aarch64
-          path: output/libxml2-static_*_${{ env.TARGET_ARCH }}.deb
-          if-no-files-found: warn
-          retention-days: 30
-
-      # ----------------------------------------------------------
-      # 13. 保存 docker 镜像缓存（加速下次构建）
-      # ----------------------------------------------------------
-      - name: Save docker image to cache
-        if: always()
-        run: |
-          mkdir -p /tmp/docker-image
-          if [ ! -f /tmp/docker-image/termux-builder.tar ]; then
-            docker save termux/package-builder:latest -o /tmp/docker-image/termux-builder.tar 2>/dev/null || true
-          fi
