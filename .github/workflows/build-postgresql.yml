@@ -46,13 +46,19 @@ jobs:
       # malloc() declaration on newer gcc/clang, turning what used to be a
       # warning into a hard error ("too many arguments to function malloc").
       # This is a known upstream/gnulib issue unrelated to our postgresql
-      # changes. Rather than relying on an environment variable making it
-      # through the docker invocation (unreliable, since termux-packages'
-      # build scripts often reset CFLAGS for cross-compile consistency),
-      # we patch flex's own build.sh to inject the relaxed flag in
-      # termux_step_pre_configure, the same pattern official packages like
-      # emacs/sc-im use for one-off compiler quirks.
-      - name: Patch flex build.sh to work around gnulib malloc.c compile error
+      # changes.
+      #
+      # IMPORTANT: the failure happens during flex's *host* build stage
+      # (TERMUX_PKG_HOSTBUILD=true; it builds a native x86_64 flex first,
+      # used to generate lexer code, compiled with plain `gcc` -- visible
+      # in the error log as `stage1flex-malloc.o`). A termux_step_pre_configure
+      # hook only affects the target (aarch64) build stage, so it does NOT
+      # apply here. The correct mechanism is $TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS,
+      # which flex's own build.sh already uses for a similar purpose
+      # (it already sets CFLAGS=-D_GNU_SOURCE=1 there for an unrelated
+      # Ubuntu 17.10 issue). We append our flag onto that same line so both
+      # fixes apply together, rather than overwriting the existing one.
+      - name: Patch flex build.sh to work around gnulib malloc.c compile error (host build stage)
         shell: bash
         run: |
           set -euxo pipefail
@@ -61,21 +67,17 @@ jobs:
             echo "ERROR: $FLEX_BUILD_SH not found" >&2
             exit 1
           fi
-          {
-            echo ""
-            echo "# LOCAL PATCH: work around a gnulib malloc.c compile error on newer"
-            echo "# gcc/clang, where the K&R-style declaration of malloc() in flex's"
-            echo "# bundled compatibility shim conflicts with the compiler's builtin"
-            echo "# prototype for malloc(), turning a warning into a hard error"
-            echo "# (too many arguments to function malloc). Downgrade that one"
-            echo "# diagnostic back to a warning; this doesn't touch any of flex's"
-            echo "# own logic, only a vendored compatibility file."
-            echo "termux_step_pre_configure() {"
-            echo '	CFLAGS+=" -Wno-error=builtin-declaration-mismatch"'
-            echo "}"
-          } >> "$FLEX_BUILD_SH"
-          echo "=== Patched flex/build.sh tail ==="
-          tail -15 "$FLEX_BUILD_SH"
+          echo "=== Before patch ==="
+          grep -n "TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS" "$FLEX_BUILD_SH"
+          sed -i \
+            's/TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS="CFLAGS=-D_GNU_SOURCE=1"/TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS="CFLAGS=-D_GNU_SOURCE=1 -Wno-error=builtin-declaration-mismatch"/' \
+            "$FLEX_BUILD_SH"
+          echo "=== After patch ==="
+          grep -n "TERMUX_PKG_EXTRA_HOSTBUILD_CONFIGURE_ARGS" "$FLEX_BUILD_SH"
+          if ! grep -q "builtin-declaration-mismatch" "$FLEX_BUILD_SH"; then
+            echo "ERROR: sed did not find the expected line to patch. flex/build.sh may have changed upstream." >&2
+            exit 1
+          fi
 
       - name: Build flex (with the compat-warning patch applied above)
         shell: bash
