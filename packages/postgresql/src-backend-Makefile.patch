@@ -5,9 +5,6 @@
  override LDFLAGS := $(LDFLAGS) $(LDFLAGS_EX) $(LDFLAGS_EX_BE)
 
 +# Static link 8 core libraries into postgres backend binary.
-+# Use -l:libNAME.a syntax to force static linking (skip .so search).
-+# Filter out the shared -lssl -lcrypto etc that configure baked in,
-+# otherwise we'd link both .so and .a (waste + conflict).
 +LIBS := $(filter-out -lssl -lcrypto -lreadline -lz -luuid -lossp-uuid -lxml2,$(LIBS))
 +LIBS += -l:libssl.a -l:libcrypto.a
 +LIBS += -l:libreadline.a -l:libhistory.a -l:libtinfo.a
