@@ -165,7 +165,7 @@ termux_step_pre_configure() {
         -lxml2 -liconv \
         -Wl,-Bdynamic \
         -ldl -lpthread -lm \
-        $LIBS"
+        ${LIBS:-}"
 }
 
 # ------------------------------------------------------------
