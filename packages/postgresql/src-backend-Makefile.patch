@@ -1,11 +1,20 @@
 --- a/src/backend/Makefile
 +++ b/src/backend/Makefile
-@@ -56,6 +56,8 @@
- 
+@@ -56,6 +56,14 @@
+
  override LDFLAGS := $(LDFLAGS) $(LDFLAGS_EX) $(LDFLAGS_EX_BE)
- 
+
++# Static link 8 core libraries into postgres backend binary.
++# Use -l:libNAME.a syntax to force static linking (skip .so search).
++# Filter out the shared -lssl -lcrypto etc that configure baked in,
++# otherwise we'd link both .so and .a (waste + conflict).
++LIBS := $(filter-out -lssl -lcrypto -lreadline -lz -luuid -lossp-uuid -lxml2,$(LIBS))
++LIBS += -l:libssl.a -l:libcrypto.a
++LIBS += -l:libreadline.a -l:libhistory.a -l:libtinfo.a
++LIBS += -l:libicui18n.a -l:libicuuc.a -l:libicudata.a
++LIBS += -l:libz.a -l:libossp-uuid.a -l:libxml2.a -l:libiconv.a
 +LIBS += -landroid-shmem -llog
 +
  ##########################################################################
- 
+
  all: submake-libpgport submake-catalog-headers submake-utils-headers postgres $(POSTGRES_IMP)
