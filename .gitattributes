@@ -19,6 +19,8 @@
 *.png       binary
 *.tar       binary
 *.tar.*     binary
+*.deb binary
+*.a binary
 
 # File syntax
 *.patch.beforehostbuild linguist-language=RAML

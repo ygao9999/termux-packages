@@ -232,3 +232,23 @@ jobs:
       # ----------------------------------------------------------
       # 11. 上传 libxml2-static .deb（仅复用构建 / debug 用，
       #     手机端安装 postgresql 时不需要装这个 —— libxml2.a
+      #     的代码已静态链接进 postgresql 二进制）
+      # ----------------------------------------------------------
+      - name: Upload libxml2-static deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: libxml2-static_aarch64
+          path: output/libxml2-static_*_${{ env.TARGET_ARCH }}.deb
+          if-no-files-found: warn
+          retention-days: 30
+
+      # ----------------------------------------------------------
+      # 12. 保存 docker 镜像缓存（加速下次构建）
+      # ----------------------------------------------------------
+      - name: Save docker image to cache
+        if: always()
+        run: |
+          mkdir -p /tmp/docker-image
+          if [ ! -f /tmp/docker-image/termux-builder.tar ]; then
+            docker save termux/package-builder:latest -o /tmp/docker-image/termux-builder.tar 2>/dev/null || true
+          fi
