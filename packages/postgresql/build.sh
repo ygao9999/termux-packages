@@ -72,7 +72,7 @@ TERMUX_PKG_SHA256=5245bd1b79700d55b8e0575be0325ef61e7bbef627e6a616e4cf36ad4687be
 # gnulib 代码与新编译器内建函数原型不匹配导致的已知问题，与本项目改动
 # 无关，见 CI workflow 里对应的处理步骤（提前在 output/ 放一份能通过
 # 编译的 flex .deb，或直接给 flex 单独跑一次带兼容 CFLAGS 的构建）。
-TERMUX_PKG_BUILD_DEPENDS="openssl-static, readline-static, libicu-static, zlib-static, ossp-uuid-static, libxml2-static, ncurses-static, libiconv-static, flex, bison, perl"
+TERMUX_PKG_BUILD_DEPENDS="openssl-static, readline-static, libicu-static, zlib-static, ossp-uuid-static, libxml2-static, ncurses-static, libiconv-static"
 
 
 
