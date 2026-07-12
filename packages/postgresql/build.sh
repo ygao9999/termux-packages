@@ -2,16 +2,15 @@
 # postgresql build.sh  (官方 18.2 + 静态链接 patch)
 #
 # 基础：完全使用 termux 官方 master 的 build.sh
-# 唯一改动：在 termux_step_post_configure 里 export LIBS
+# 唯一改动：在 termux_step_pre_configure 里修改 LDFLAGS
 #           做部分静态链接（8 个核心库静态进二进制）
 #
-# 为什么放 post_configure 而不是 pre_configure？
-#   configure 阶段会用 LIBS 跑测试程序，如果 LIBS 含
-#   -Wl,-Bstatic -lssl ... 这种，链接器会尝试解析静态库，
-#   空的 main 程序 + 静态库未解析符号 = configure exit 77
-#   ("C compiler cannot create executables")。
-#   post_configure 在所有 configure 探测完成后执行，
-#   此时 LIBS 只影响 make 阶段的最终 link，不影响探测。
+# 为什么用 LDFLAGS 而不是 LIBS？
+#   LIBS 会被 configure 的 feature 探测用，含 -Wl,-Bstatic -lssl
+#   会导致空的 main 测试程序链接失败 → exit 77。
+#   LDFLAGS 只在最终 link 时用，不参与探测。
+#   而且用 -Wl,-Bstatic/.../-Wl,-Bdynamic 包裹静态库段，
+#   后续系统库 (-ldl -lpthread -lm) 走动态。
 # ============================================================
 
 TERMUX_PKG_HOMEPAGE=https://www.postgresql.org
@@ -89,36 +88,34 @@ termux_step_pre_configure() {
                "${TERMUX_PREFIX}/include/ossp/uuid.h"
         ln -sf "${TERMUX_PREFIX}/include/ossp-uuid/uuid.h" \
                "${TERMUX_PREFIX}/include/uuid.h"
-}
 
-# ============================================================
-# 唯一改动：termux_step_post_configure
-# 在所有 configure 探测完成后，export LIBS 做部分静态链接。
-# 此时 LIBS 只影响 make 阶段的最终 link，不影响 configure 探测。
-# ============================================================
-termux_step_post_configure() {
         # 8 个核心库静态链接进二进制，系统库走动态
+        #
+        # 用 LDFLAGS 而不是 LIBS：LIBS 会被 configure 探测用，
+        # -Wl,-Bstatic -lssl 会让空 main 测试程序链接失败 → exit 77
+        # LDFLAGS 只在最终 link 时生效，不参与探测。
         #
         # 依赖方向（左依赖右，被依赖者放右边）：
         #   ssl       → crypto
         #   readline  → history → tinfo
         #   icui18n   → icuuc → icudata
         #   z
-        #   ossp-uuid (ossp, 独立) — 注意 .a 文件叫 libossp-uuid.a,所以 -lossp-uuid
+        #   ossp-uuid (ossp, 独立) — .a 文件叫 libossp-uuid.a
         #   xml2      → iconv
         #
         # ${VAR:-} 是为了避免 termux set -u 报 unbound variable
-        export LIBS="-Wl,-Bstatic \
+        export LDFLAGS="${LDFLAGS:-} -Wl,-Bstatic \
                 -lssl -lcrypto \
                 -lreadline -lhistory -ltinfo \
                 -licui18n -licuuc -licudata \
                 -lz \
                 -lossp-uuid \
                 -lxml2 -liconv \
-                -Wl,-Bdynamic \
-                -ldl -lpthread -lm \
-                ${LIBS:-}"
+                -Wl,-Bdynamic"
 }
+
+# termux_step_post_configure 已删除——LDFLAGS 在 pre_configure 里
+# 设置就够了，make 时会用到。
 
 termux_step_post_make_install() {
         # Man pages are not installed by default:
