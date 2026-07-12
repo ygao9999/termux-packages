@@ -1,16 +1,22 @@
 # ============================================================
 # postgresql build.sh  (官方 18.2 + 静态链接 patch)
 #
-# 基础：完全使用 termux 官方 master 的 build.sh
-# 唯一改动：在 termux_step_pre_configure 里修改 LDFLAGS
-#           做部分静态链接（8 个核心库静态进二进制）
+# 静态链接 8 个核心库的真正方法：
+#   - LIBS 环境变量在 post_configure 里 export 没用，因为
+#     autotools 把 LIBS = @LIBS@ 烤进 Makefile（优先级 3），
+#     环境变量（优先级 4）被覆盖。
+#   - 正确做法：用 TERMUX_PKG_EXTRA_MAKE_ARGS 传 LIBS=... 命令行
+#     参数（优先级 2，beat makefile 赋值）。
+#   - 用 -l:libNAME.a 语法强制链接 .a 文件，不走 .so 优先搜索。
 #
-# 为什么用 LDFLAGS 而不是 LIBS？
-#   LIBS 会被 configure 的 feature 探测用，含 -Wl,-Bstatic -lssl
-#   会导致空的 main 测试程序链接失败 → exit 77。
-#   LDFLAGS 只在最终 link 时用，不参与探测。
-#   而且用 -Wl,-Bstatic/.../-Wl,-Bdynamic 包裹静态库段，
-#   后续系统库 (-ldl -lpthread -lm) 走动态。
+# 参考证据：
+#   - termux-packages build-package.sh:778 调用 termux_step_post_configure
+#   - termux_step_make.sh:15 用 make -j N（无 -e 无 LIBS=）
+#   - GNU make 优先级：命令行 > Makefile 赋值 > 环境变量
+#   - termux-packages/packages/postgresql/src-backend-Makefile.patch
+#     用 LIBS += -landroid-shmem -llog 加额外库
+#   - termux 仓库里大量包用 -l:libNAME.a 做强制静态链接
+#     (binutils, sox, fluidsynth, cryptopp, clamav 等)
 # ============================================================
 
 TERMUX_PKG_HOMEPAGE=https://www.postgresql.org
@@ -32,20 +38,12 @@ TERMUX_PKG_DEPENDS="libandroid-execinfo, libandroid-shmem, libicu, libuuid, libx
 # termux build-package.sh -i 会自动从 output/ 找到并 dpkg -i 进 build 环境
 #
 # --with-uuid=ossp 对齐 ossp-uuid-static
-# 注意：ossp-uuid-static 只装 .a，header 在 ossp-uuid 包里（路径是
-#       ossp-uuid/uuid.h）。但 postgresql configure 找的是 ossp/uuid.h
-#       或 uuid.h，所以还需要在 pre_configure 里建 symlink。
+# 注意：ossp-uuid-static 只装 .a（libossp-uuid.a），header 在 ossp-uuid 包
+#       里（路径是 ossp-uuid/uuid.h）。但 postgresql configure 找的是
+#       ossp/uuid.h 或 uuid.h，所以还需要在 pre_configure 里建 symlink。
 TERMUX_PKG_BUILD_DEPENDS="openssl-static, readline-static, libicu-static, zlib-static, ossp-uuid-static, ossp-uuid, libxml2-static, ncurses-static, libiconv-static"
-# - pgac_cv_prog_cc_LDFLAGS_EX_BE__Wl___export_dynamic: Needed to fix PostgreSQL 16 that
-#   causes initdb failure: cannot locate symbol
-# - pgac_cv_prog_cc_LDFLAGS__Wl___as_needed: Inform that the linker supports as-needed. It's
-#   not stricly necessary but avoids unnecessary linking of binaries.
-# - USE_UNNAMED_POSIX_SEMAPHORES: Avoid using System V semaphores which are disabled on Android.
-# - ZIC=...: The zic tool is used to build the time zone database bundled with postgresql.
-#   We specify a binary built in termux_step_host_build which has been patched to use symlinks
-#   over hard links (which are not supported as of Android 6.0+).
-#   There exists a --with-system-tzdata configure flag, but that does not work here as Android
-#   uses a custom combined tzdata file.
+
+# ----- configure args -----
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 --with-icu
 --with-libxml
@@ -56,6 +54,29 @@ ZIC=${TERMUX_PKG_HOSTBUILD_DIR}/src/timezone/zic
 pgac_cv_prog_cc_LDFLAGS_EX_BE__Wl___export_dynamic=yes
 pgac_cv_prog_cc_LDFLAGS__Wl___as_needed=yes
 "
+
+# ============================================================
+# 关键改动：用 TERMUX_PKG_EXTRA_MAKE_ARGS 传 LIBS= 命令行参数
+#
+# GNU make 优先级：命令行参数 (LIBS=...) beat Makefile 赋值 (LIBS = @LIBS@)
+# 所以 make 会用我们指定的 LIBS，不用 configure 烤的 @LIBS@
+#
+# 用 -l:libNAME.a 语法强制链接 .a 文件，不走 .so 优先搜索
+#
+# 顺序（左依赖右，被依赖者放右边）：
+#   ssl       → crypto
+#   readline  → history → tinfo
+#   icui18n   → icuuc → icudata
+#   z
+#   ossp-uuid (ossp, 独立) — .a 文件叫 libossp-uuid.a
+#   xml2      → iconv
+#   pgcommon, pgport (postgresql 自己的内部库)
+#   android-shmem, log (termux 必需)
+#
+# 系统库 (-ldl -lpthread -lm) 走动态，因为它们本来就是 .so
+# ============================================================
+TERMUX_PKG_EXTRA_MAKE_ARGS='LIBS=-lpgcommon -lpgport -l:libssl.a -l:libcrypto.a -l:libreadline.a -l:libhistory.a -l:libtinfo.a -l:libicui18n.a -l:libicuuc.a -l:libicudata.a -l:libz.a -l:libossp-uuid.a -l:libxml2.a -l:libiconv.a -landroid-shmem -llog -ldl -lpthread -lm'
+
 TERMUX_PKG_RM_AFTER_INSTALL="
 bin/ecpg
 lib/libecpg*
@@ -67,78 +88,46 @@ TERMUX_PKG_REPLACES="postgresql-contrib (<= 10.3-1), postgresql-dev"
 TERMUX_PKG_SERVICE_SCRIPT=("postgres" "mkdir -p ~/.postgres\nif [ -f \"~/.postgres/postgresql.conf\" ]; then DATADIR=\"~/.postgres\"; else DATADIR=\"$TERMUX_PREFIX/var/lib/postgresql\"; fi\nexec postgres -D \$DATADIR 2>&1")
 
 termux_step_host_build() {
-        # Build a native zic binary which we have patched to
-        # use symlinks instead of hard links.
-        $TERMUX_PKG_SRCDIR/configure --without-readline
-        make -j "${TERMUX_PKG_MAKE_PROCESSES}"
+	$TERMUX_PKG_SRCDIR/configure --without-readline
+	make -j "${TERMUX_PKG_MAKE_PROCESSES}"
 }
 
 termux_step_pre_configure() {
-        # Certain packages are not safe to build on device because their
-        # build.sh script deletes specific files in $TERMUX_PREFIX.
-        if $TERMUX_ON_DEVICE_BUILD; then
-                termux_error_exit "Package '$TERMUX_PKG_NAME' is not safe for on-device builds."
-        fi
+	if $TERMUX_ON_DEVICE_BUILD; then
+		termux_error_exit "Package '$TERMUX_PKG_NAME' is not safe for on-device builds."
+	fi
 
-        # ossp-uuid 包把 header 装在 $PREFIX/include/ossp-uuid/uuid.h
-        # 但 postgresql configure 找的是 ossp/uuid.h 或 uuid.h
-        # 建 2 个 symlink 让 configure 能找到
-        mkdir -p "${TERMUX_PREFIX}/include/ossp"
-        ln -sf "${TERMUX_PREFIX}/include/ossp-uuid/uuid.h" \
-               "${TERMUX_PREFIX}/include/ossp/uuid.h"
-        ln -sf "${TERMUX_PREFIX}/include/ossp-uuid/uuid.h" \
-               "${TERMUX_PREFIX}/include/uuid.h"
-
-        # 8 个核心库静态链接进二进制，系统库走动态
-        #
-        # 用 LDFLAGS 而不是 LIBS：LIBS 会被 configure 探测用，
-        # -Wl,-Bstatic -lssl 会让空 main 测试程序链接失败 → exit 77
-        # LDFLAGS 只在最终 link 时生效，不参与探测。
-        #
-        # 依赖方向（左依赖右，被依赖者放右边）：
-        #   ssl       → crypto
-        #   readline  → history → tinfo
-        #   icui18n   → icuuc → icudata
-        #   z
-        #   ossp-uuid (ossp, 独立) — .a 文件叫 libossp-uuid.a
-        #   xml2      → iconv
-        #
-        # ${VAR:-} 是为了避免 termux set -u 报 unbound variable
-        export LDFLAGS="${LDFLAGS:-} -Wl,-Bstatic \
-                -lssl -lcrypto \
-                -lreadline -lhistory -ltinfo \
-                -licui18n -licuuc -licudata \
-                -lz \
-                -lossp-uuid \
-                -lxml2 -liconv \
-                -Wl,-Bdynamic"
+	# ossp-uuid 包把 header 装在 $PREFIX/include/ossp-uuid/uuid.h
+	# 但 postgresql configure 找的是 ossp/uuid.h 或 uuid.h
+	# 建 2 个 symlink 让 configure 能找到
+	mkdir -p "${TERMUX_PREFIX}/include/ossp"
+	ln -sf "${TERMUX_PREFIX}/include/ossp-uuid/uuid.h" \
+	       "${TERMUX_PREFIX}/include/ossp/uuid.h"
+	ln -sf "${TERMUX_PREFIX}/include/ossp-uuid/uuid.h" \
+	       "${TERMUX_PREFIX}/include/uuid.h"
 }
 
-# termux_step_post_configure 已删除——LDFLAGS 在 pre_configure 里
-# 设置就够了，make 时会用到。
-
 termux_step_post_make_install() {
-        # Man pages are not installed by default:
-        make -C doc/src/sgml install-man
+	make -C doc/src/sgml install-man
 
-        for contrib in \
-                btree_gin \
-                btree_gist \
-                citext \
-                dblink \
-                fuzzystrmatch \
-                hstore \
-                pageinspect \
-                pg_freespacemap \
-                pg_stat_statements \
-                pg_trgm \
-                pgcrypto \
-                pgrowlocks \
-                postgres_fdw \
-                tablefunc \
-                unaccent \
-                uuid-ossp \
-                ; do
-                (make -C contrib/${contrib} -s -j ${TERMUX_PKG_MAKE_PROCESSES} install)
-        done
+	for contrib in \
+		btree_gin \
+		btree_gist \
+		citext \
+		dblink \
+		fuzzystrmatch \
+		hstore \
+		pageinspect \
+		pg_freespacemap \
+		pg_stat_statements \
+		pg_trgm \
+		pgcrypto \
+		pgrowlocks \
+		postgres_fdw \
+		tablefunc \
+		unaccent \
+		uuid-ossp \
+		; do
+		(make -C contrib/${contrib} -s -j ${TERMUX_PKG_MAKE_PROCESSES} install)
+	done
 }
