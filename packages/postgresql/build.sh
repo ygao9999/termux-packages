@@ -85,6 +85,19 @@ termux_step_pre_configure() {
                "${TERMUX_PREFIX}/include/ossp/uuid.h"
         ln -sf "${TERMUX_PREFIX}/include/ossp-uuid/uuid.h" \
                "${TERMUX_PREFIX}/include/uuid.h"
+
+        # 关键：把预编译的 libxml2.a cp 到 termux prefix
+        # termux -i 不会从 output/ 拉 BUILD_DEPENDS 里的 libxml2-static,
+        # 所以必须手动 cp。在 pre_configure 里做，确保 termux 完成 cache
+        # extract 之后才 cp，不会被覆盖。
+        if [ -f "${TERMUX_PACKAGE_DIR}/prebuilt/libxml2-static_2.15.3-2_aarch64.deb" ]; then
+                echo "=== Pre-install libxml2.a from prebuilt deb ==="
+                cd /tmp && rm -rf pg-libxml2-extract && mkdir pg-libxml2-extract && cd pg-libxml2-extract
+                ar x "${TERMUX_PACKAGE_DIR}/prebuilt/libxml2-static_2.15.3-2_aarch64.deb"
+                tar -xJf data.tar.xz
+                cp -v data/data/com.termux/files/usr/lib/libxml2.a "${TERMUX_PREFIX}/lib/"
+                ls -lh "${TERMUX_PREFIX}/lib/libxml2.a"
+        fi
 }
 
 termux_step_post_make_install() {
