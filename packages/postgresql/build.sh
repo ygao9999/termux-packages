@@ -32,9 +32,11 @@ TERMUX_PKG_DEPENDS="libandroid-execinfo, libandroid-shmem, libicu, libuuid, libx
 # packages/postgresql/prebuilt/libxml2-static_*.deb 复制到 output/
 # termux build-package.sh -i 会自动从 output/ 找到并 dpkg -i 进 build 环境
 #
-# --with-uuid=ossp 对齐 ossp-uuid-static（ossp 装的是 <uuid.h>，
-# e2fsprogs 的 libuuid 装的是 <uuid/uuid.h>，header 路径不同）
-TERMUX_PKG_BUILD_DEPENDS="openssl-static, readline-static, libicu-static, zlib-static, ossp-uuid-static, libxml2-static, ncurses-static, libiconv-static"
+# --with-uuid=ossp 对齐 ossp-uuid-static
+# 注意：ossp-uuid-static 只装 .a，header 在 ossp-uuid 包里（路径是
+#       ossp-uuid/uuid.h）。但 postgresql configure 找的是 ossp/uuid.h
+#       或 uuid.h，所以还需要在 pre_configure 里建 symlink。
+TERMUX_PKG_BUILD_DEPENDS="openssl-static, readline-static, libicu-static, zlib-static, ossp-uuid-static, ossp-uuid, libxml2-static, ncurses-static, libiconv-static"
 # - pgac_cv_prog_cc_LDFLAGS_EX_BE__Wl___export_dynamic: Needed to fix PostgreSQL 16 that
 #   causes initdb failure: cannot locate symbol
 # - pgac_cv_prog_cc_LDFLAGS__Wl___as_needed: Inform that the linker supports as-needed. It's
@@ -78,6 +80,15 @@ termux_step_pre_configure() {
         if $TERMUX_ON_DEVICE_BUILD; then
                 termux_error_exit "Package '$TERMUX_PKG_NAME' is not safe for on-device builds."
         fi
+
+        # ossp-uuid 包把 header 装在 $PREFIX/include/ossp-uuid/uuid.h
+        # 但 postgresql configure 找的是 ossp/uuid.h 或 uuid.h
+        # 建 2 个 symlink 让 configure 能找到
+        mkdir -p "${TERMUX_PREFIX}/include/ossp"
+        ln -sf "${TERMUX_PREFIX}/include/ossp-uuid/uuid.h" \
+               "${TERMUX_PREFIX}/include/ossp/uuid.h"
+        ln -sf "${TERMUX_PREFIX}/include/ossp-uuid/uuid.h" \
+               "${TERMUX_PREFIX}/include/uuid.h"
 }
 
 # ============================================================
@@ -93,7 +104,7 @@ termux_step_post_configure() {
         #   readline  → history → tinfo
         #   icui18n   → icuuc → icudata
         #   z
-        #   uuid      (e2fs, 独立)
+        #   ossp-uuid (ossp, 独立) — 注意 .a 文件叫 libossp-uuid.a,所以 -lossp-uuid
         #   xml2      → iconv
         #
         # ${VAR:-} 是为了避免 termux set -u 报 unbound variable
@@ -102,7 +113,7 @@ termux_step_post_configure() {
                 -lreadline -lhistory -ltinfo \
                 -licui18n -licuuc -licudata \
                 -lz \
-                -luuid \
+                -lossp-uuid \
                 -lxml2 -liconv \
                 -Wl,-Bdynamic \
                 -ldl -lpthread -lm \

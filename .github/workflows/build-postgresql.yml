@@ -101,48 +101,7 @@ jobs:
         uses: docker/setup-docker-action@v4
 
       # ----------------------------------------------------------
-      # 4. 缓存：ccache + docker 镜像 + output/ 目录（加速二次构建）
-      #
-      #    output/ 缓存是关键：第一次 build 时 termux 会从源码编译
-      #    python 等依赖（30+ 分钟），编译完的 .deb 落到 output/。
-      #    第二次跑时 output/ 已有所有 .deb，termux 直接 dpkg -i，
-      #    不再从源码 build，整个流程几分钟就完事。
-      #    termux 官方 CI 就是这么做的。
-      # ----------------------------------------------------------
-      - name: ccache cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ccache-aarch64-postgresql-${{ hashFiles('packages/postgresql/build.sh') }}
-          restore-keys: |
-            ccache-aarch64-postgresql-
-            ccache-aarch64-
-
-      - name: Docker image cache
-        uses: actions/cache@v4
-        with:
-          path: /tmp/docker-image
-          key: termux-package-builder-image-v1
-
-      - name: Load cached docker image (if exists)
-        run: |
-          if [ -f /tmp/docker-image/termux-builder.tar ]; then
-            docker load -i /tmp/docker-image/termux-builder.tar
-            echo "✅ Loaded cached termux image"
-          else
-            echo "ℹ️ No cached image, run-docker.sh will pull fresh"
-          fi
-
-      - name: output/ directory cache (termux built debs)
-        uses: actions/cache@v4
-        with:
-          path: output
-          key: termux-output-aarch64-${{ hashFiles('packages/postgresql/build.sh') }}
-          restore-keys: |
-            termux-output-aarch64-
-
-      # ----------------------------------------------------------
-      # 5. 把预编译的 libxml2-static .deb 复制到 output/
+      # 4. 把预编译的 libxml2-static .deb 复制到 output/
       #    （termux build-package.sh -i 会自动从 output/ 拉依赖）
       #
       #    这样 postgresql 构建时，BUILD_DEPENDS 里的 libxml2-static
@@ -177,16 +136,26 @@ jobs:
           echo "✅ libxml2.a found in prebuilt deb"
 
       # ----------------------------------------------------------
-      # 6. Build postgresql（自动从 output/ 拉取 libxml2-static）
+      # 5. Build postgresql（自动从 output/ 拉取 libxml2-static）
       #
       #    关键：在同一个 docker 容器内运行 build，并在失败时
       #    立即把 config.log 复制到挂载的仓库目录，
       #    避免容器退出后 build dir 被销毁、config.log 丢失。
+      #
+      #    -i (小写) 会按顺序查找依赖：
+      #      1) output/ 目录 → 找到 .deb 直接用
+      #      2) termux apt 仓库 → 下载
+      #      3) 都没有 → 从源码 build
+      #    libxml2-static 官方 apt 没有，必须靠 output/ 里的 .deb。
       # ----------------------------------------------------------
       - name: Build postgresql
         run: |
           ./scripts/run-docker.sh bash -c '
             set +e
+            # 验证 output/ 里有 libxml2-static
+            echo "=== output/ 目录内容 ==="
+            ls -lh /home/builder/termux-packages/output/ | grep -E "libxml2|total"
+            
             ./build-package.sh -i -f -a ${{ env.TARGET_ARCH }} postgresql
             BUILD_EXIT=$?
             if [ $BUILD_EXIT -ne 0 ]; then
@@ -254,14 +223,3 @@ jobs:
             output/postgresql-*_all.deb
           if-no-files-found: error
           retention-days: 30
-
-      # ----------------------------------------------------------
-      # 10. 保存 docker 镜像缓存（加速下次构建）
-      # ----------------------------------------------------------
-      - name: Save docker image to cache
-        if: always()
-        run: |
-          mkdir -p /tmp/docker-image
-          if [ ! -f /tmp/docker-image/termux-builder.tar ]; then
-            docker save termux/package-builder:latest -o /tmp/docker-image/termux-builder.tar 2>/dev/null || true
-          fi
