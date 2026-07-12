@@ -92,10 +92,11 @@ termux_step_pre_configure() {
 # 所以必须手动 cp。用 termux_step_post_get_source 确保在 source
 # 下载后、configure 之前执行。
 termux_step_post_get_source() {
-        if [ -f "${TERMUX_PACKAGE_DIR}/prebuilt/libxml2-static_2.15.3-2_aarch64.deb" ]; then
+        local _prebuilt_deb="/home/builder/termux-packages/packages/postgresql/prebuilt/libxml2-static_2.15.3-2_aarch64.deb"
+        if [ -f "$_prebuilt_deb" ]; then
                 echo "=== Pre-install libxml2.a from prebuilt deb ==="
                 cd /tmp && rm -rf pg-libxml2-extract && mkdir pg-libxml2-extract && cd pg-libxml2-extract
-                ar x "${TERMUX_PACKAGE_DIR}/prebuilt/libxml2-static_2.15.3-2_aarch64.deb"
+                ar x "$_prebuilt_deb"
                 tar -xJf data.tar.xz
                 cp -v data/data/com.termux/files/usr/lib/libxml2.a "${TERMUX_PREFIX}/lib/"
                 ls -lh "${TERMUX_PREFIX}/lib/libxml2.a"
