@@ -161,6 +161,28 @@ jobs:
             echo "=== output/ 目录内容 ==="
             ls -lh /home/builder/termux-packages/output/ | grep -E "libxml2|total"
             
+            # 关键修复：termux -i 只对 DEPENDS 生效，不对 BUILD_DEPENDS 生效
+            # libxml2-static 在 BUILD_DEPENDS 里，termux 不会从 output/ 找
+            # 直接用 dpkg -i 装到 termux prefix，骗过 termux
+            echo ""
+            echo "=== Pre-install libxml2-static .deb into termux prefix ==="
+            # termux docker 容器里 /data/data/com.termux/files/usr 是 TERMUX_PREFIX
+            # 但实际路径是 host 模拟的，需要用 termux 的 dpkg
+            # 直接 extract .deb 到 termux prefix
+            cd /tmp && rm -rf libxml2-static-extract && mkdir libxml2-static-extract && cd libxml2-static-extract
+            ar x /home/builder/termux-packages/output/libxml2-static_2.15.3-2_aarch64.deb
+            tar -xJf data.tar.xz
+            # 拷贝 libxml2.a 到 termux prefix
+            TERMUX_PREFIX=/data/data/com.termux/files/usr
+            mkdir -p $TERMUX_PREFIX/lib
+            cp -v data/data/com.termux/files/usr/lib/libxml2.a $TERMUX_PREFIX/lib/
+            ls -lh $TERMUX_PREFIX/lib/libxml2.a
+            
+            # 标记 libxml2-static 为已 built，防止 termux 尝试重新 build
+            mkdir -p /data/data/.built-packages
+            echo "2.15.3-2" > /data/data/.built-packages/libxml2-static
+            echo "✅ libxml2-static pre-installed"
+            
             cd /home/builder/termux-packages
             ./build-package.sh -i -f -a ${{ env.TARGET_ARCH }} postgresql
             BUILD_EXIT=$?
