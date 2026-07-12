@@ -136,15 +136,18 @@ jobs:
           echo "✅ libxml2.a found in prebuilt deb"
 
       # ----------------------------------------------------------
-      # 5. Build postgresql（强制依赖从 apt 下载,不从源码 build）
+      # 5. Build postgresql
       #
-      #    用 -I (大写) 强制所有依赖从 termux apt 仓库下载 .deb,
-      #    不从源码 build。这样不会触发 python 等包的源码 build,
-      #    总时间从 30+ 分钟降到 10 分钟左右。
+      #    用 -i (小写) 让 termux 自己处理依赖:
+      #      1) output/ 目录 → 找到 .deb 直接用
+      #      2) termux apt 仓库 → 下载
+      #      3) 都没有 → 从源码 build
       #
-      #    但 -I 会忽略 output/ 里的 libxml2-static,所以先在容器内
-      #    dpkg -i 把它装进 /data/data/com.termux/files/,骗过 termux
-      #    让它以为 libxml2-static 已经"安装"了。
+      #    libxml2-static 官方 apt 没有,output/ 里有我们预编译的 .deb,
+      #    termux 会直接用。
+      #
+      #    python 等其它依赖 termux 会从源码 build,第一次 30+ 分钟,
+      #    后续有 output/ cache 会快。这是 termux 官方 CI 的标准做法。
       #
       #    失败时立即把 config.log 复制到挂载的仓库目录,
       #    避免容器退出后 build dir 被销毁、config.log 丢失。
@@ -158,18 +161,8 @@ jobs:
             echo "=== output/ 目录内容 ==="
             ls -lh /home/builder/termux-packages/output/ | grep -E "libxml2|total"
             
-            # 先把 libxml2-static .deb 解压到 termux prefix,
-            # 骗过 termux build 系统让它以为已经安装了
-            echo ""
-            echo "=== Pre-install libxml2-static into termux prefix ==="
-            cd /tmp && rm -rf libxml2-static-install && mkdir libxml2-static-install && cd libxml2-static-install
-            ar x /home/builder/termux-packages/output/libxml2-static_*.deb
-            tar -xJf data.tar.xz
-            cp -rv data/data/com.termux/files/usr/lib/libxml2.a /data/data/com.termux/files/usr/lib/
-            ls -lh /data/data/com.termux/files/usr/lib/libxml2.a
-            
-            # 用 -I 强制从 apt 下载依赖,不从源码 build
-            ./build-package.sh -I -f -a ${{ env.TARGET_ARCH }} postgresql
+            cd /home/builder/termux-packages
+            ./build-package.sh -i -f -a ${{ env.TARGET_ARCH }} postgresql
             BUILD_EXIT=$?
             if [ $BUILD_EXIT -ne 0 ]; then
               echo ""
