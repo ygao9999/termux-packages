@@ -20,7 +20,7 @@
 #   4. 把预编译的 libxml2-static .deb 复制到 output/
 #      （termux build-package.sh -i 会自动从 output/ 拉依赖）
 #   5. build postgresql → 自动从 output/ 拉 libxml2-static
-#   6. 失败时收集 config log 用于排查
+#   6. 失败时收集 config.log 用于排查
 #   7. 验证 + 上传 postgresql deb 作为 artifact
 #
 # 触发方式：
@@ -90,7 +90,7 @@ jobs:
               packages/postgresql/build.sh
             echo "⚠️ 已覆盖版本为 ${{ github.event.inputs.pg_version }}，SHA256 跳过校验"
           fi
-
+          
           echo "=== packages/postgresql/build.sh head ==="
           head -20 packages/postgresql/build.sh
 
@@ -101,7 +101,13 @@ jobs:
         uses: docker/setup-docker-action@v4
 
       # ----------------------------------------------------------
-      # 4. 缓存：ccache + termux docker 镜像（加速二次构建）
+      # 4. 缓存：ccache + docker 镜像 + output/ 目录（加速二次构建）
+      #
+      #    output/ 缓存是关键：第一次 build 时 termux 会从源码编译
+      #    python 等依赖（30+ 分钟），编译完的 .deb 落到 output/。
+      #    第二次跑时 output/ 已有所有 .deb，termux 直接 dpkg -i，
+      #    不再从源码 build，整个流程几分钟就完事。
+      #    termux 官方 CI 就是这么做的。
       # ----------------------------------------------------------
       - name: ccache cache
         uses: actions/cache@v4
@@ -127,6 +133,14 @@ jobs:
             echo "ℹ️ No cached image, run-docker.sh will pull fresh"
           fi
 
+      - name: output/ directory cache (termux built debs)
+        uses: actions/cache@v4
+        with:
+          path: output
+          key: termux-output-aarch64-${{ hashFiles('packages/postgresql/build.sh') }}
+          restore-keys: |
+            termux-output-aarch64-
+
       # ----------------------------------------------------------
       # 5. 把预编译的 libxml2-static .deb 复制到 output/
       #    （termux build-package.sh -i 会自动从 output/ 拉依赖）
@@ -138,24 +152,24 @@ jobs:
       - name: Stage prebuilt libxml2-static deb
         run: |
           mkdir -p output
-
+          
           if [ ! -f "${{ env.PREBUILT_LIBXML2_STATIC }}" ]; then
             echo "❌ 预编译 libxml2-static deb 不存在：${{ env.PREBUILT_LIBXML2_STATIC }}"
             echo "请将文件 commit 到该路径"
             exit 1
           fi
-
+          
           cp -v "${{ env.PREBUILT_LIBXML2_STATIC }}" output/
-
+          
           echo "=== output/ 目录内容 ==="
           ls -lh output/
-
+          
           echo ""
           echo "=== 验证 deb 内容 ==="
           cd /tmp && rm -rf verify && mkdir verify && cd verify
           ar x $GITHUB_WORKSPACE/output/$(basename ${{ env.PREBUILT_LIBXML2_STATIC }})
           tar -tJvf data.tar.xz | head -10
-
+          
           if ! tar -tJf data.tar.xz | grep -q "libxml2.a"; then
             echo "❌ 预编译 deb 不包含 libxml2.a"
             exit 1
@@ -181,7 +195,7 @@ jobs:
               mkdir -p /home/builder/termux-packages/config-logs
               find /home/builder/.termux-build/postgresql -name "config.log" \
                 -exec cp {} /home/builder/termux-packages/config-logs/ \; 2>/dev/null
-
+              
               # 同时把 config.log 的关键部分打印到 Actions 日志里
               for log in /home/builder/.termux-build/postgresql/build/config.log \
                          /home/builder/.termux-build/postgresql/host-build/config.log; do
@@ -213,14 +227,14 @@ jobs:
         run: |
           echo "=== postgresql debs ==="
           ls -lh output/postgresql_*_${{ env.TARGET_ARCH }}.deb
-
+          
           echo ""
           echo "=== postgresql package control info ==="
           cd /tmp && rm -rf verify-pg && mkdir verify-pg && cd verify-pg
           ar x $GITHUB_WORKSPACE/output/postgresql_*_${{ env.TARGET_ARCH }}.deb
           tar -xJf control.tar.xz ./control
           cat control
-
+          
           # 期望 Depends 只含 3 个 libandroid-*（8 个核心库已静态链接）
           if grep -E "Depends.*(openssl|readline|libicu|zlib|libuuid|libxml2|ncurses|libiconv)" control; then
             echo "⚠️ 警告：Depends 中出现了应该静态链接的库"
