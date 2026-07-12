@@ -10,7 +10,7 @@
 +LIBS += -l:libreadline.a -l:libhistory.a -l:libtinfo.a
 +LIBS += -l:libicui18n.a -l:libicuuc.a -l:libicudata.a
 +LIBS += -l:libz.a -l:libossp-uuid.a -l:libxml2.a -l:libiconv.a
-+LIBS += -landroid-shmem -llog
++LIBS += -landroid-shmem -llog -lc++_static -lc++abi -lunwind
 +
  ##########################################################################
 
